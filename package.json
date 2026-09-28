@@ -98,6 +98,7 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit && vitest run",
+    "check:real-cli": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-real-cli.ts",
     "test": "vitest run",
     "package": "vsce package",
     "vscode:prepublish": "npm run build"
