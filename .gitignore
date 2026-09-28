@@ -27,6 +27,7 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+.vscode-test/
 
 # Environment / secrets
 .env
@@ -39,6 +40,8 @@ playwright/.cache/
 .artifacts/
 .worktrees/
 .agentfield-out-*/
+.commandcode/
+scratchpad/
 
 # Logs
 logs/
