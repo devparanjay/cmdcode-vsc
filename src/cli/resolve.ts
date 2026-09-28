@@ -13,9 +13,35 @@ import { delimiter, join } from 'node:path';
 // only environment key any probe adds is `CI=1`, which the vendor's own
 // `ensureIdeExtensionInstalled` checks first (`if (process.env.CI) return`) to
 // suppress its auto-installer, so a probe can never cause an install.
+//
+// One vendor side effect is out of our hands and is NOT a contract violation:
+// the CLI creates `~/.commandcode/telemetry-install-id` on *any* invocation,
+// including `--version` ✅ (verified against command-code@1.66.0 with an empty
+// HOME). It creates no `config.json` and sets no `autoInstallExtension` key, so
+// the opt-out this module must not touch is untouched. A probe is a run of
+// somebody else's program; the guarantee this module makes is about what *we*
+// do, and we write nothing.
 
-/** The probe argv. Fixed here, not shared: no sibling module owns it (§4.5). */
-const VERSION_PROBE_ARGS: readonly string[] = Object.freeze(['--output-format', 'json', '--version']);
+/**
+ * The probe argv. Fixed here, not shared: no sibling module owns it (§4.5).
+ *
+ * `--help`, and the decision is read from the flag's own declaration line in
+ * the help. Verified against command-code@1.66.0 ✅:
+ *
+ *   `--output-format json --version` → stdout `1.66.0`, stderr empty, exit 0.
+ *
+ * The CLI does NOT echo its argv, so that argv cannot be recognised as having
+ * been accepted. Nor can the exit status: the same build answers
+ * `--totally-bogus-flag --version` with exit 0 ✅, so an unknown flag is not an
+ * error and status cannot discriminate. The help text is the one place the
+ * vendor *declares* the flag:
+ *
+ *   `--output-format <format>   -p output: text (default) or json (NDJSON …)`
+ *
+ * `--help` costs 0.65 s ✅ — the same as `--version`, and a tenth of the 5.1 s
+ * `config get` that §4.5 rules out.
+ */
+const HELP_PROBE_ARGS: readonly string[] = Object.freeze(['--help']);
 
 /** npm package name; the `npm root -g`-relative entry point lives under it. */
 const NPM_PACKAGE = 'command-code';
@@ -259,34 +285,37 @@ export async function resolveCli(
 /**
  * Probe whether the located CLI understands `--output-format json`.
  *
- * The probe is `--output-format json --version`: `command-code@1.66.0` answers
- * in 0.67 s ✅, and deliberately NOT `config get`, which takes 5.1 s ✅ — five
- * times the default budget, on a path that runs at every activation.
- *
- * A flag the CLI does not know is not an error: the same binary answers
- * `--totally-bogus-flag --version` with exit 0 ✅, so exit status alone cannot
- * decide the question and the echoed argv is what is inspected. Anything else
- * (a timeout, a signal, a crash, unparseable output) is reported as
- * unsupported rather than guessed at, which degrades to the `cli-too-old`
- * message in §4.2.
+ * The probe is `--help` (see `HELP_PROBE_ARGS` for why), and the answer is
+ * whether the help *declares* the flag. Anything else — a timeout, a signal, a
+ * crash, help that never mentions the flag — is reported as unsupported rather
+ * than guessed at, which degrades to the `cli-too-old` message in §4.2.
  *
  * @param timeoutMs bounds the probe. 0 disables the deadline.
  */
 export async function supportsJsonOutput(r: ResolvedCli, timeoutMs = 5_000): Promise<boolean> {
-  const result = await runProbe(r.command, [...r.args, ...VERSION_PROBE_ARGS], timeoutMs);
+  const result = await runProbe(r.command, [...r.args, ...HELP_PROBE_ARGS], timeoutMs);
   if (result === null) {
     return false;
   }
-  return mentionsOutputFormatJson(result.stdout, result.stderr);
+  // Exit status is a *necessary* condition, not the signal: a build that
+  // cannot print help at all is not a build that speaks the JSON contract, and
+  // requiring it keeps a partial write of help from reading as support.
+  return result.code === 0 && declaresOutputFormatJson(result.stdout, result.stderr);
 }
 
 /**
- * Does the probe's own output show that `--output-format json` was accepted?
+ * Does the help declare `--output-format` with a `json` value?
  *
- * Matching the echoed argv is the only probe that survives the vendor's
- * forgiving argument parsing: a pre-JSON build reports `--help` text or an
- * "Unknown option" line instead of echoing the flag back.
+ * Anchored to the whole line so a *declared* flag is required, not merely a
+ * mention. The same text appears in `Examples` and in a bare `--output-format`
+ * on its own, so a looser pattern would match a CLI that has retired JSON but
+ * still mentions the option; anchoring to the leading `  --output-format
+ * <format>` declaration shape is what makes a false require the flag to be gone
+ * from the option list.
+ *
+ * stdout and stderr are both read: a CLI that prints help to either stream
+ * answers the question identically.
  */
-function mentionsOutputFormatJson(...streams: readonly string[]): boolean {
-  return streams.some((text) => /--output-format[= ]+json/i.test(text));
+function declaresOutputFormatJson(...streams: readonly string[]): boolean {
+  return streams.some((text) => /^\s*--output-format\s+<[^>]+>.*\bjson\b/im.test(text));
 }

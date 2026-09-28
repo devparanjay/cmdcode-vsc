@@ -11,17 +11,80 @@ import { resolveCli, supportsJsonOutput, type ResolvedCli } from '../src/cli/res
 // network — every executable is a fake, written into a temp directory.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// A fake CLI. It echoes its own argv space-separated, the way a real CLI
-// reports a flag it accepted, which is what lets `supportsJsonOutput` assert
-// *both* directions without a real binary: a fake that supports JSON echoes the
-// flag back, one that does not exits 1 and says "Unknown option".
-const SUPPORTS_JSON = `#!/usr/bin/env node
-process.stdout.write(process.argv.slice(2).join(' ') + '\\n');
+// Fakes for the CLI. All of them answer `--help`, because that is the probe:
+// a current build *declares* `--output-format <format> … json`, a pre-JSON
+// build has no such line, and neither echoes the argv it was handed.
+
+/**
+ * The options table of command-code@1.66.0's real `--help`, captured from the
+ * binary and trimmed to the options block (the vendor also prints ~140 lines of
+ * slash commands, which cannot affect a match).
+ *
+ * This fixture exists because the previous implementation was validated only
+ * against a fake that echoed its own argv, so its probe passed while returning
+ * false for every real CLI. No test spawns the real binary; this is a recording
+ * of what it said.
+ */
+const REAL_HELP_EXCERPT = [
+  'Command Code v1.66.0',
+  '',
+  'Usage',
+  '  cmd <command> [options]',
+  '',
+  'Options',
+  '  cmd                               Start interactive session',
+  '  -r, --resume [name]               Resume a conversation by id or name (use quotes for multi-word names), or pick from history',
+  '  -c, --continue                    Continue the last conversation',
+  '  -p, --print [query]               Run in non-interactive mode, output response and exit',
+  '  --max-turns <number>              Cap conversation turns in -p mode (default 100; exit 8 on cap-hit)',
+  '  --output-format <format>          -p output: text (default) or json (NDJSON event stream + final result line)',
+  '  --tools-all                       -p: enable every tool, including the ones a headless run withholds',
+  '  -m, --model <model>               Run on a specific model this session',
+  '  --effort <level>                  Set reasoning effort for the session (e.g. low, medium, high) - depends on the model',
+  '  --list-models                     List the models available for use',
+  '  --plan                            Start in plan mode',
+  '  --yolo                            Bypass all permission prompts (alias for --dangerously-skip-permissions)',
+  '  -v, --version                     Output the version number',
+  '  -h, --help                        Display this help message',
+  '',
+  'Commands',
+  '  cmd info                          Display system information',
+  '  cmd status                        Show authentication status',
+].join('\n');
+
+/** A fake that answers `--help` with the captured text: the current-CLI case. */
+const SUPPORTS_JSON = `process.stdout.write(${JSON.stringify(REAL_HELP_EXCERPT)} + '\\n');
 `;
 
-const NO_JSON = `#!/usr/bin/env node
-process.stderr.write('Unknown option: --output-format\\n');
-process.exit(1);
+/** A pre-JSON build: a real help screen with the option simply not in it. */
+const NO_JSON = `const lines = [
+  'Command Code v1.20.0',
+  '',
+  'Options',
+  '  -p, --print [query]               Run in non-interactive mode, output response and exit',
+  '  --max-turns <number>              Cap conversation turns in -p mode',
+  '  -v, --version                     Output the version number',
+  '  -h, --help                        Display this help message',
+];
+process.stdout.write(lines.join('\\n') + '\\n');
+`;
+
+/**
+ * Mentions `--output-format json` in its examples without declaring the option —
+ * the shape that made the previous, unanchored regex return a false `true`.
+ */
+const MENTIONS_ONLY = `const lines = [
+  'Command Code v1.66.0',
+  '',
+  'Options',
+  '  -p, --print [query]               Run in non-interactive mode, output response and exit',
+  '  -v, --version                     Output the version number',
+  '  -h, --help                        Display this help message',
+  '',
+  'Examples',
+  '  cmd --output-format json -p "your query"   stream NDJSON',
+];
+process.stdout.write(lines.join('\\n') + '\\n');
 `;
 
 /** Never settles without being killed, to prove the deadline is real. */
@@ -43,6 +106,20 @@ const dir = join(process.env.HOME, '.commandcode');
 mkdirSync(dir, { recursive: true });
 writeFileSync(join(dir, 'config.json'), JSON.stringify({ autoInstallExtension: false }));
 process.exit(1);
+`;
+
+/**
+ * Reproduces the one side effect the vendor's binary has on boot ✅ — it writes
+ * `~/.commandcode/telemetry-install-id` on *any* invocation, `--help` included.
+ * Pinned so the guarantee in the module header stays honest about what is ours
+ * to control and what is the CLI's.
+ */
+const WRITES_TELEMETRY_ID = `const { mkdirSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+const dir = join(process.env.HOME, '.commandcode');
+mkdirSync(dir, { recursive: true });
+writeFileSync(join(dir, 'telemetry-install-id'), 'install-id');
+process.stdout.write(${JSON.stringify(REAL_HELP_EXCERPT)} + '\\n');
 `;
 
 const temps: string[] = [];
@@ -371,16 +448,45 @@ describe('resolveCli — timeout', () => {
   });
 });
 describe('supportsJsonOutput', () => {
-  it('returns true when the probe echoes --output-format json back', async () => {
+  it('returns true for help that declares --output-format with a json value', async () => {
     const cli = fakeBin('cmd', SUPPORTS_JSON);
 
     expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(true);
   });
 
-  it('returns false when the installed CLI rejects the flag', async () => {
+  it('returns false for a help screen with no --output-format line', async () => {
     const cli = fakeBin('cmd', NO_JSON);
 
     expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(false);
+  });
+
+  it('returns false when --output-format json is only mentioned in an example', async () => {
+    // The regression the previous unanchored regex would have got wrong: a bare
+    // mention is not a declaration, and this help has no option entry at all.
+    const cli = fakeBin('cmd', MENTIONS_ONLY);
+
+    expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(false);
+  });
+
+  it('returns false when the help declares the flag but the run fails', async () => {
+    // Exit status is a necessary condition: help text from a failed run is not
+    // evidence that the flag works.
+    const cli = fakeBin(
+      'cmd',
+      `${SUPPORTS_JSON}process.exitCode = 1;\n`,
+    );
+
+    expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(false);
+  });
+
+  it('accepts the declaration from stderr as well as stdout', async () => {
+    const cli = fakeBin(
+      'cmd',
+      `process.stderr.write(${JSON.stringify(REAL_HELP_EXCERPT)} + '\\n');
+`,
+    );
+
+    expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(true);
   });
 
   it('returns false for a command that does not exist', async () => {
@@ -402,7 +508,7 @@ describe('supportsJsonOutput', () => {
   it('prepends the resolved args so the npm-global entry point is executed', async () => {
     // The npm-global shape: `command` is the host node, `args[0]` is the
     // package entry point. Read the child's argv back to prove the entry point
-    // is executed and the probe flags land after it, in order, with no shell.
+    // is executed and the probe flag lands after it, with no shell.
     const seen = await runProbeArgv({
       command: process.execPath,
       args: [],
@@ -410,7 +516,7 @@ describe('supportsJsonOutput', () => {
     });
 
     expect(seen[0]).toMatch(/recorder\.mjs$/);
-    expect(seen.slice(1)).toEqual(['--output-format', 'json', '--version']);
+    expect(seen.slice(1)).toEqual(['--help']);
   });
 
   it('defaults the probe deadline to 5000 ms when no timeout is given', async () => {
@@ -431,6 +537,69 @@ describe('supportsJsonOutput', () => {
     expect(elapsed).toBeGreaterThan(4_000);
     expect(elapsed).toBeLessThan(15_000);
   }, 20_000);
+});
+
+describe('the probe signal matches the real vendor binary', () => {
+  // The regression test for the defect this iteration fixed. The old probe
+  // matched an argv echo that the real CLI does not perform, so it returned
+  // false for every real install and §5.2 step 4 aborted activation with
+  // `cli-too-old` before the provider was ever registered. It passed because
+  // the only oracle was a fake written to echo — the probe was validated
+  // against its own assumption instead of the vendor.
+  //
+  // REC capture, run once against command-code@1.66.0 ✅:
+  //
+  //   $ CI=1 cmd --output-format json --version   → stdout "1.66.0", exit 0
+  //   $ CI=1 cmd --totally-bogus-flag --version   → stdout "1.66.0", exit 0
+  //   $ CI=1 cmd --help                           → 152 lines, exit 0, declares
+  //                                               `--output-format <format>`
+  //
+  // The suite spawns no real binary, so these are the recorded strings. The
+  // genuine end-to-end check is `npm run check:real-cli`, which runs the
+  // module's own `supportsJsonOutput` against the installed `cmd` when one
+  // exists and prints SKIP when it does not.
+  const REAL_ECHOED_ARGV = '1.66.0\n';
+  const REAL_VERSION_OF_BOGUS_FLAG = '1.66.0\n';
+
+  it('would return false under the old argv-echo signal, which is why it shipped green', () => {
+    // Guards the reason the bug existed: the echo the old implementation
+    // required is absent from the real output, and present in a fake that
+    // echoes. If a future vendor *does* echo, this fake is the new contract.
+    expect(/--output-format[= ]+json/i.test(REAL_ECHOED_ARGV)).toBe(false);
+    expect(
+      /--output-format[= ]+json/i.test('--output-format json --version'),
+    ).toBe(true);
+  });
+
+  it('reads the declaration from the real help, not from a rewritten argv', () => {
+    // The two signals have to be told apart by the recorded output itself:
+    // the version line carries no mention at all, the help carries the option.
+    expect(REAL_ECHOED_ARGV).not.toContain('--output-format');
+    expect(REAL_VERSION_OF_BOGUS_FLAG).toBe(REAL_ECHOED_ARGV);
+    expect(REAL_HELP_EXCERPT).toContain('--output-format <format>');
+  });
+
+  it('returns true against the captured real help, with no binary spawned', async () => {
+    // The recorded options table served by a fake: the assertion that was
+    // missing last iteration, namely the probe run against genuine CLI output.
+    const cli = fakeBin('cmd', SUPPORTS_JSON);
+
+    expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(true);
+  });
+
+  it('returns false for the real output of the argv the old probe used', async () => {
+    // The other side of the same recording. The real CLI answers
+    // `--output-format json --version` with a bare version line, so a probe fed
+    // genuine vendor output has to reach its verdict from `--help` — and this
+    // fixture, replayed through the module, is exactly what the old
+    // implementation could not tell apart from the fake that echoed.
+    const cli = fakeBin('cmd', `process.stdout.write(${JSON.stringify(REAL_ECHOED_ARGV)});\n`);
+
+    expect(await supportsJsonOutput({ command: cli, args: [], source: 'configured' })).toBe(false);
+    // …while the real help, replayed the same way, is the signal that answers it.
+    const withHelp = fakeBin('cmd', SUPPORTS_JSON);
+    expect(await supportsJsonOutput({ command: withHelp, args: [], source: 'configured' })).toBe(true);
+  });
 });
 
 describe('Command Code configuration directory is never touched', () => {
@@ -482,7 +651,7 @@ describe('Command Code configuration directory is never touched', () => {
     const reporter = fakeBin(
       'reporter',
       `require('node:fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.env));
-process.stdout.write('--output-format json --version\\n');
+process.stdout.write(${JSON.stringify(REAL_HELP_EXCERPT)} + '\\n');
 `,
       sandbox,
     );
@@ -516,6 +685,36 @@ process.stdout.write('--output-format json --version\\n');
       // The fake's write landed in the sandbox…
       expect(existsSync(join(sandbox, '.commandcode', 'config.json'))).toBe(true);
       // …and the user's real Command Code directory is untouched.
+      expect(snapshot()).toEqual(before);
+    } finally {
+      setEnv('HOME', ORIGINAL_HOME);
+    }
+  });
+
+  it('leaves the opt-out key alone when the CLI itself writes its own config', async () => {
+    // The real binary creates `~/.commandcode/telemetry-install-id` on *any*
+    // invocation ✅, `--help` included, and it does so before the module gets
+    // any say in it. So the guarantee this module can actually keep is the one
+    // that matters: the user's *settings* are never written or edited. A fake
+    // reproducing the vendor's boot-time write is run with HOME redirected into
+    // a sandbox, and the real directory must be byte-identical afterwards — no
+    // config.json created, and no `autoInstallExtension` key anywhere.
+    const sandbox = tempDir();
+    const before = snapshot();
+    setEnv('HOME', sandbox);
+    try {
+      const cli = fakeBin('cmd', WRITES_TELEMETRY_ID);
+      withPath(tempDir());
+
+      const resolved = await resolveCli(cli, 1_000);
+      expect(resolved?.source).toBe('configured');
+      expect(await supportsJsonOutput(resolved as ResolvedCli)).toBe(true);
+
+      // The CLI's own write happened…
+      expect(existsSync(join(sandbox, '.commandcode', 'telemetry-install-id'))).toBe(true);
+      // …and it is not a settings file, which is what we promised not to touch.
+      expect(existsSync(join(sandbox, '.commandcode', 'config.json'))).toBe(false);
+      // The user's real Command Code directory is unchanged.
       expect(snapshot()).toEqual(before);
     } finally {
       setEnv('HOME', ORIGINAL_HOME);
