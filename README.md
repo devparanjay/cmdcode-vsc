@@ -44,9 +44,9 @@ Measured on a typical machine:
   prefix and can be slightly faster.
 
 To make the wait feel less empty, the extension emits a short placeholder part and then streams
-the answer token by token as it arrives, so you see progress instead of a spinner. If your first
-token takes more than about 8 seconds, the extension reports the elapsed time rather than
-retrying — a retry would double your token spend for a latency win you may not want.
+the answer token by token as it arrives, so you see progress instead of a spinner. If a turn
+outruns `cmdcode.timeoutSeconds`, it is stopped and reported as a timeout rather than retried — a
+retry would double your token spend for a latency win you may not want.
 
 ## Limitations (please read)
 
@@ -87,7 +87,7 @@ never writes to the Command Code config or its opt-out keys.
 
 | Setting | Type | Default | Effect |
 |---|---|---|---|
-| `cmdcode.cliPath` | string | `""` | Absolute path to the CLI. Empty resolves `cmd` on `PATH`. |
+| `cmdcode.cliPath` | string | `""` | Absolute path to the CLI. Empty resolves `cmd` on `PATH`. If the path you set is missing or not executable, resolution falls back to `PATH` — check **Cmd Code: Show Log** to see which one was actually chosen. |
 | `cmdcode.maxTurns` | number | `24` | Agent turns per request (`--max-turns`), clamped 1–100. |
 | `cmdcode.timeoutSeconds` | number | `600` | Wall-clock deadline per request. `0` disables it. |
 | `cmdcode.showThinkingPlaceholder` | boolean | `true` | Show a placeholder while the CLI starts. |
