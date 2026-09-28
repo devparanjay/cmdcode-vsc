@@ -9,6 +9,11 @@ coverage/**
 .git
 .gitignore
 .vscodeignore
+docs/**
+.artifacts/**
+.worktrees/**
+scratchpad/**
+.agentfield-out-*/
 **/tsconfig*.json
 tsup.config.ts
 vitest.config.ts

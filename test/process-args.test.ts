@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildArgs, buildEnv, MAX_PROMPT_BYTES } from '../src/cli/process.js';
+import { buildArgs, buildEnv, MAX_PROMPT_BYTES, redactArgs } from '../src/cli/process.js';
 import { CliError, type RunRequest } from '../src/types.js';
 
 // AC-06 and AC-07 at the boundary: the exact argv, the exact env overlay, and
@@ -130,6 +130,65 @@ describe('buildArgs prompt size guard', () => {
     const prompt = 'é'.repeat(chars);
     expect(prompt.length).toBeLessThan(MAX_PROMPT_BYTES);
     expect(() => buildArgs(request({ prompt }))).toThrow(CliError);
+  });
+});
+
+// AC-16 observability, half 1: the spawn line is the only place `maxTurns` is
+// visible at runtime, and the only place the user can see which model and
+// session a turn used. The prompt is the one argument that must never reach it.
+describe('redactArgs — the logged argv', () => {
+  it('keeps every flag, so --max-turns stays observable in the log', () => {
+    const logged = redactArgs(buildArgs(request({ maxTurns: 2 })));
+
+    expect(logged).toEqual([
+      '-p',
+      `<${Buffer.byteLength(PROMPT, 'utf8')} bytes>`,
+      '--output-format',
+      'json',
+      '-m',
+      MODEL,
+      '--max-turns',
+      '2',
+      '--no-auto-update',
+    ]);
+  });
+
+  it('never emits the prompt text, only its size', () => {
+    const secret = 'my API key is hunter2 and my question is private';
+    const logged = redactArgs(buildArgs(request({ prompt: secret })));
+
+    expect(logged.join(' ')).not.toContain('hunter2');
+    expect(logged.join(' ')).not.toContain('private');
+    expect(logged).toContain(`<${Buffer.byteLength(secret, 'utf8')} bytes>`);
+  });
+
+  it('reports bytes, not characters, for multi-byte prompts', () => {
+    const prompt = 'é'.repeat(10);
+    const logged = redactArgs(['-p', prompt]);
+
+    expect(logged[1]).toBe('<20 bytes>');
+  });
+
+  it('keeps a resumed session id, which is not user prose', () => {
+    const logged = redactArgs(buildArgs(request({ resumeSessionId: 'ab4c5b22-0000' })));
+
+    expect(logged.slice(0, 2)).toEqual(['-r', 'ab4c5b22-0000']);
+  });
+
+  it('leaves an argv with no prompt untouched', () => {
+    expect(redactArgs(['--help'])).toEqual(['--help']);
+  });
+
+  it('does not drop a trailing -p with no value', () => {
+    expect(redactArgs(['--help', '-p'])).toEqual(['--help', '-p']);
+  });
+
+  it('does not mutate the argv it was given', () => {
+    const args = buildArgs(request());
+    const copy = [...args];
+    redactArgs(args);
+
+    expect(args).toEqual(copy);
   });
 });
 

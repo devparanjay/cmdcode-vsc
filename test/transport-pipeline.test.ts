@@ -517,6 +517,39 @@ describe('transport: deadline (§5.4)', () => {
   });
 });
 
+describe('transport: the spawn log line (AC-16)', () => {
+  it('logs the argv with the prompt redacted, so maxTurns is observable', async () => {
+    const h = harness();
+    const run = h.transport.run(request({ maxTurns: 7, model: MODEL }), recorder());
+    await flush();
+    h.latest().emit('close', 0);
+    await expect(run).resolves.toBeUndefined();
+
+    const line = h.log.find((l) => l.includes('spawning'));
+    expect(line).toBeDefined();
+    expect(line).toContain('--max-turns 7');
+    expect(line).toContain(`-m ${MODEL}`);
+    expect(line).not.toContain('reply with exactly: PONG');
+  });
+
+  it('logs the resolved command, not a bare "spawning"', async () => {
+    const h = harness(async () => ({ command: '/usr/local/bin/node', args: ['/lib/cmd.mjs'], source: 'npm-global' }));
+    const run = h.transport.run(request(), recorder());
+    await flush();
+    h.latest().emit('close', 0);
+    await run;
+
+    expect(h.log.some((l) => l.includes('spawning /usr/local/bin/node /lib/cmd.mjs'))).toBe(true);
+  });
+
+  it('never logs a spawn line when the CLI could not be resolved', async () => {
+    const h = harness(async () => null);
+    await h.transport.run(request(), recorder());
+
+    expect(h.log.some((l) => l.includes('spawning'))).toBe(false);
+  });
+});
+
 describe('transport: describe()', () => {
   it('reports the resolved path, including a leading entry point', async () => {
     await expect(harness().transport.describe()).resolves.toBe('cmd');

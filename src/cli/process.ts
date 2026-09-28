@@ -187,6 +187,26 @@ export function buildArgs(req: RunRequest): string[] {
 }
 
 /**
+ * The argv as it is logged: every flag and value, except the prompt, which is
+ * replaced by a length. The prompt is the user's own conversation text and the
+ * output channel is what they paste into a bug report, so the spawn line keeps
+ * the configuration that is observable behaviour (`--max-turns`, `-m`, `-r`)
+ * and drops the one that is not.
+ */
+export function redactArgs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '-p' && i + 1 < args.length) {
+      out.push('-p', `<${Buffer.byteLength(args[i + 1], 'utf8')} bytes>`);
+      i += 1;
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
+
+/**
  * The env overlay for the child: a NEW object carrying `baseEnv` plus three
  * forced values. Never mutates its argument, and never invents a
  * CMD_CONFIG_DIR — the child must honour the user's real config.
@@ -320,6 +340,16 @@ export class CliTransportImpl implements CliTransport {
       handlers.onError(new CliError('cli-not-found', 'the CLI could not be located'));
       return;
     }
+
+    // §AC-16 observability: the spawn line is what makes `maxTurns` and
+    // `timeoutSeconds` visible in the log, which is the only place either is
+    // observable at runtime. The prompt is redacted — it is the user's own
+    // conversation text, and the log is something they paste into bug reports.
+    // `cli.args` leads the real spawn argv, so the line has to carry it too or
+    // the npm-global mode would name a node binary with no entry point.
+    this.log.info(
+      `Cmd Code: spawning ${cli.command} ${[...cli.args, ...redactArgs(args)].join(' ')}`,
+    );
 
     const run = this.execute(req, cli, args, handlers);
     this.active = run;
