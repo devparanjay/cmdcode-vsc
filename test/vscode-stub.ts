@@ -16,6 +16,14 @@
  * tests against them.
  */
 
+// ─── Roles ───────────────────────────────────────────────────────────────────
+
+/** Mirrors the numeric @types/vscode enum so role values compare identically. */
+export enum LanguageModelChatMessageRole {
+  User = 1,
+  Assistant = 2,
+}
+
 // ─── Value parts ─────────────────────────────────────────────────────────────
 
 export class LanguageModelTextPart {
