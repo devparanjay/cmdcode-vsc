@@ -28,6 +28,9 @@ playwright-report/
 blob-report/
 playwright/.cache/
 .vscode-test/
+.vscode-test.*
+.vite/
+node_modules/.cache/
 
 # Environment / secrets
 .env
@@ -72,6 +75,7 @@ lerna-debug.log*
 *.swp
 *.swo
 *~
+.history/
 
 # OS files
 .DS_Store
