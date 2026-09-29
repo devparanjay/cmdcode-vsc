@@ -459,3 +459,327 @@ written into the file that exists to quote real counts is the exact failure this
 reacting to. If a future run disagrees with the table, the runner is right and the table is
 stale: re-run the command and re-paste, do not reconcile by hand.
 
+## 10. Acceptance gate — 19 criteria, executed
+
+Run after the merge of `transport-per-run-state`, `concurrency-regression-tests` and
+`transport-contract-docs`, on branch `issue/98fc7cd0-04-final-gate-verification` at `63b0dc9`.
+Commands were run in the execution order of architecture §9. Every output below is pasted from
+the run that produced the verdict; none of the counts is copied from a plan document.
+
+**Verdict: 19/19 pass. Two criteria were executed in a corrected form, for the reasons stated
+in place below (AC-02, AC-19). One additional interaction was found while running AC-17 and is
+recorded in §10.3; it required no code change.**
+
+| AC | Criterion | Command run | Verdict |
+|---|---|---|---|
+| AC-01 | baseline suite green, ≥ 19 files / ≥ 416 tests | `npm run check 2>&1 \| tail -5` | **pass** — 20 files, 422 tests, 0 failed |
+| AC-02 | no test deleted or weakened | JSON reporter → file, then `jq` | **pass (corrected form)** — 422 ≥ 416, 20 files |
+| AC-03 | typecheck and bundle clean | `tsc` ×2 `&&` `tsup` | **pass** — `dist/extension.js` produced |
+| AC-04 | cancel signals every live run | `npx vitest run test/transport-concurrency.test.ts` | **pass** |
+| AC-05 | cancel does not wait for child close | ″ | **pass** |
+| AC-06 | settle does not clear another run's escalation | ″ | **pass** |
+| AC-07 | the latch is run-scoped | ″ | **pass** |
+| AC-08 | pre-spawn latch still works | `npx vitest run test/transport-pipeline.test.ts` | **pass** — 27/27, file byte-identical |
+| AC-09 | the four cancellation/deadline tests | `… -t 'cancellation'` | **pass** — 4 passed, 0 failed |
+| AC-10 | per-run delta isolation preserved | concurrency file | **pass** |
+| AC-11 | `run()` still never rejects | transport-pipeline | **pass** |
+| AC-12 | no-workspace `cwd` is the host cwd | concurrency file | **pass** — real `spawn`, exit 0 |
+| AC-13 | activation with no folder open | `npx vitest run test/extension.test.ts …` | **pass** — 4 files / 87 tests |
+| AC-14 | `CHANGELOG.md` Unreleased → Fixed | the §9 grep | **pass** — exit 0 |
+| AC-15 | traceability rows + refreshed counts | the two `grep -q` | **pass** — §9 rows present |
+| AC-16 | `cancel()` states the guarantee | the `sed … \| grep -qiE` | **pass** — exit 0 |
+| AC-17 | `npm run package` still succeeds, same 8 files | `npm run package` | **pass** — 8 files, no new warning |
+| AC-18 | security posture unchanged | 3 security-posture files | **pass** — 0 failed |
+| AC-19 | diff stays inside the allowlist | scoped to `0f10b17` | **pass (corrected form)** — prints nothing |
+
+### 10.1 Gate 0 — baseline, integrity, build
+
+**AC-01.** Exits 0.
+
+```
+ Test Files  20 passed (20)
+      Tests  422 passed (422)
+   Start at  20:11:09
+   Duration  9.87s (tests 91%, transform 6%, import 3%)
+=== exit(npm run check)=0 ===
+```
+
+**AC-02.** The criterion's **literal** pipeline cannot pass on vitest 5 — reproduced here, not
+assumed:
+
+```
+$ npx vitest run --reporter=json 2>/dev/null | jq '.numPassedTests >= 416'
+JSON report written to /…/.vitest/json/output.json
+jq: parse error: Invalid numeric literal at line 1, column 5
+literal exit=5
+```
+
+Only a one-line notice reaches stdout; the report is a file. The file-based form of the same
+check (§9.3) passes:
+
+```
+$ npx vitest run --reporter=json >/dev/null 2>&1
+vitest json exit=0
+$ jq '.numPassedTests, .numFailedTests, .numTotalTests' .vitest/json/output.json
+422
+0
+422
+$ jq '.numPassedTests >= 416' .vitest/json/output.json
+true
+$ ls test/*.test.ts | wc -l
+      20
+```
+
+`numPassedTests` 422 ≥ 416, `numFailedTests` 0, and 20 ≥ 19 test files. No test was deleted or
+disabled to make the refactor pass.
+
+**AC-03.** Both typechecks clean, bundle built, exit 0.
+
+```
+tsconfig.json: clean
+tsconfig.test.json: clean
+CJS dist/extension.js     56.84 KB
+CJS ⚡️ Build success in 81ms
+=== exit=0 ===
+-rw-r--r--@ 1 paranjay  staff   58227  20:12  dist/extension.js
+```
+
+### 10.2 The fix, the regression guards and the security posture
+
+**AC-04 … AC-07, AC-10, AC-12** — all six named tests pass, spelled exactly as the criteria name
+them:
+
+```
+ ✓ cancel() signals every live run when two runs overlap 2ms
+ ✓ cancel() resolves without waiting for any child to close 0ms
+ ✓ settling one run does not clear another run's SIGKILL escalation 1ms
+ ✓ a cancel during a live run does not latch against the next run 0ms
+ ✓ concurrent runs deliver each run's deltas to its own handlers 0ms
+ ✓ an empty cwd inherits the parent directory rather than failing the spawn 21ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+=== exit=0 ===
+```
+
+**AC-08 / AC-11** — `test/transport-pipeline.test.ts` passes with **zero modifications**. The
+diff is empty and the blob hash is unchanged, which is stronger than a clean test run:
+
+```
+ Test Files  1 passed (1)
+      Tests  27 passed (27)
+=== exit=0 ===
+
+$ git diff --name-only 0f10b17 -- test/transport-pipeline.test.ts
+(no output)
+$ git rev-parse 0f10b17:test/transport-pipeline.test.ts HEAD:test/transport-pipeline.test.ts
+0bda8bf11ea4b899df980eb670f92dbe82fa8ff3
+0bda8bf11ea4b899df980eb670f92dbe82fa8ff3
+```
+
+**AC-09** — `-t 'cancellation'` selects the three tests in the `cancellation (§5.3)` block; the
+fourth named test lives under `deadline (§5.4)` and is run separately, so all four named
+cancellation/deadline tests are covered:
+
+```
+ ✓ transport: cancellation (§5.3) > sends SIGTERM, and escalates to SIGKILL after KILL_GRACE_MS 2ms
+ ✓ transport: cancellation (§5.3) > resolves cancel immediately when there is no live child 0ms
+ ✓ transport: cancellation (§5.3) > does not run a turn cancelled before it spawned 0ms
+ ✓ transport: cancellation (§5.3) > clears the escalation when the child honours SIGTERM 0ms
+ Test Files  1 passed (1)
+      Tests  4 passed | 23 skipped (27)
+=== exit=0 ===
+
+$ npx vitest run test/transport-pipeline.test.ts -t 'reports timeout, not interrupted, when our own deadline fires'
+ ✓ reports timeout, not interrupted, when our own deadline fires 2ms
+      Tests  1 passed | 26 skipped (27)
+```
+
+**AC-11** named test, run directly:
+
+```
+$ npx vitest run test/transport-pipeline.test.ts -t 'never lets run reject, on any path'
+ ✓ transport: isolation > never lets run reject, on any path 2ms
+      Tests  1 passed | 26 skipped (27)
+```
+
+**AC-13 / AC-18** — the provider test and the three security-posture files, 0 failed:
+
+```
+ Test Files  4 passed (4)
+      Tests  87 passed (87)
+=== exit=0 ===
+
+$ npx vitest run test/extension.test.ts -t 'survives a workspace with no folder open'
+ ✓ readConfig > survives a workspace with no folder open 2ms
+      Tests  1 passed | 40 skipped (41)
+```
+
+The AC-18 posture is unchanged, and the three properties the criterion names are still the
+shipped behaviour rather than merely still-tested:
+
+- **`shell: false`** on the production spawn path — `src/cli/process.ts:533`, and the type makes
+  it unrepresentable to pass anything else (`readonly shell: false`, `src/cli/process.ts:255`).
+- **The forced env overlay** — `buildEnv()` returns a *new* object carrying `baseEnv` plus
+  `CI: '1'`, `NO_COLOR: '1'`, `FORCE_COLOR: '0'`, and never invents a `CMD_CONFIG_DIR`
+  (`src/cli/process.ts:219`). Its five tests all pass, including *never sets CMD_CONFIG_DIR — the
+  child must read the real user config*.
+- **A redacted prompt in the log line** — `redactArgs()` replaces the `-p` value with
+  `<N bytes>` (`src/cli/process.ts:196`); its seven tests pass, headed by *never emits the
+  prompt text, only its size*.
+
+`buildArgs` and `redactArgs` are byte-identical to the pre-change baseline: neither appears in
+the diff of §10.4.
+
+**AC-14, AC-15, AC-16** — the three documentation greps all exit 0:
+
+```
+$ grep -q '^## \[Unreleased\]' CHANGELOG.md && sed -n '/^## \[Unreleased\]/,/^## \[0\.1\.0\]/p' CHANGELOG.md | grep -qiE 'concurren|overlap'
+AC-14 exit=0
+
+$ grep -c 'cancel() signals every live run' docs/verification.md
+1
+$ grep -c 'cancel() resolves without waiting for any child to close' docs/verification.md
+1
+
+$ sed -n '/Abort the in-flight run/,/^  \*\//p' src/types.ts | grep -qiE 'escalat|does not wait|SIGKILL'
+AC-16 exit=0
+      69
+```
+
+The 69 is the unbounded range already documented in §9.2; it is unchanged and still expected.
+
+### 10.3 AC-17 — packaging, and the one interaction worth recording
+
+**AC-17 passes: 8 files, no new `vsce` warning, exit 0.**
+
+```
+ INFO  Files included in the VSIX:
+├─ [Content_Types].xml
+├─ extension.vsixmanifest
+└─ extension/
+   ├─ LICENSE.txt [33.71 KB]
+   ├─ changelog.md [1.41 KB]
+   ├─ package.json [3.29 KB]
+   ├─ readme.md [5.89 KB]
+   ├─ dist/
+   │  └─ extension.js [56.86 KB]
+   └─ media/
+      └─ icon.png [0.48 KB]
+
+ DONE  Packaged: …/cmdcode-0.1.0.vsix (8 files, 33 KB)
+=== exit=0 ===
+```
+
+The content set is byte-for-byte the 8-file set recorded in §3: the two `vsce` envelopes plus
+`LICENSE.txt`, `changelog.md`, `package.json`, `readme.md`, `dist/extension.js`, `media/icon.png`.
+The diff touches no packaged artefact.
+
+> **Interaction found while running the gate, reported rather than "fixed".** Run in the
+> architecture's §9 order, AC-02 leaves `.vitest/` in the worktree (see §9.3), and AC-17's
+> `vsce package` then **includes it**:
+>
+> ```
+> $ npx vitest run --reporter=json >/dev/null 2>&1 && npm run package
+>  DONE  Packaged: …/cmdcode-0.1.0.vsix (9 files, 52.26 KB)
+> $ unzip -Z1 cmdcode-0.1.0.vsix | sort
+> extension/.vitest/json/output.json      ← the 9th file
+> ```
+>
+> `.vscodeignore` covers `src/**`, `test/**`, `docs/**`, `scratchpad/**` and the agent scratch
+> directories, but **not** `.vitest/**`, so the reporter's 141 KB output JSON is swept into the
+> VSIX. It is inert — the packaged extension never reads it — but it is a real content-set
+> deviation, and it is a shipped-artefact leak of a local test artifact.
+>
+> **No fix was applied, deliberately.** The one-line fix is a `.vitest/**` entry in
+> `.vscodeignore`, and `.vscodeignore` is **outside the AC-19 allowlist** — editing it would fail
+> the containment gate that authorises this merge, trading a packaging nicety for a failed gate.
+> `.gitignore` is the same story: adding `.vitest` there would hide the untracked directory
+> rather than fix the packaging, and is likewise outside the allowlist.
+>
+> The AC-17 verdict above was taken on a worktree with `.vitest/` removed, which is the state a
+> release build is actually made from — the packaged extension is built by `vscode:prepublish`
+> → `tsup`, and the report file is a byproduct of *running the AC-02 check*, not of building.
+> **Recommendation for the next issue, outside this diff's scope:** add `.vitest/**` to
+> `.vscodeignore` (or have the JSON reporter write under an already-ignored path) so the two gate
+> criteria stop interacting. Recorded here so the next reader does not rediscover it.
+
+### 10.4 AC-19 — the diff allowlist, and why its baseline was corrected
+
+**The criterion's literal command is wrong on this tree, and was corrected rather than run
+as written.**
+
+`main` on this repository is a single commit, `e5b1e29 "Add README"`, containing only
+`README.md`. It **predates the entire extension**. Diffing against it therefore lists every file
+the extension has ever added, none of which this work touched:
+
+```
+$ git ls-tree -r --name-only main
+README.md
+
+$ git diff --name-only main...HEAD | grep -vE '^(src/cli/process\.ts|src/types\.ts|src/extension\.ts|test/.*\.ts|CHANGELOG\.md|docs/verification\.md)$'
+.gitignore
+.vscodeignore
+LICENSE
+README.md
+media/icon.png
+package-lock.json
+package.json
+scripts/check-real-cli.ts
+scripts/make-icon.mjs
+src/catalog-to-chat.ts
+src/catalog.ts
+src/chat-provider.ts
+src/cli/ndjson.ts
+src/cli/resolve.ts
+src/commands.ts
+src/errors.ts
+src/prompt.ts
+src/transcript.ts
+tsconfig.json
+tsconfig.test.json
+tsup.config.ts
+vitest.config.ts
+      22
+```
+
+All 22 are pre-existing tree contents that the allowlist was never meant to police; a gate that
+lists 22 untouched files cannot distinguish containment from breakage. **The allowlist is
+therefore scoped to the pre-change baseline commit `0f10b17` ("chore: finalize repo for handoff")**,
+the commit at which this work began. This is the same correction the issue file records in its
+AC-19 note, applied visibly rather than silently.
+
+The complete change set against that baseline:
+
+```
+$ git diff --name-only 0f10b17...HEAD
+CHANGELOG.md
+docs/verification.md
+src/cli/process.ts
+src/types.ts
+test/transport-concurrency.test.ts
+```
+
+Five files, every one of them on the allowlist, and the gate prints nothing:
+
+```
+$ git diff --name-only 0f10b17...HEAD | grep -vE '^(src/cli/process\.ts|src/types\.ts|src/extension\.ts|test/.*\.ts|CHANGELOG\.md|docs/verification\.md)$'
+$ echo $?
+1        # 1 == no line matched the inverse filter
+```
+
+`src/extension.ts` is on the allowlist but **absent from the change set**: review claim #2 was
+rebutted with a test rather than a code change (§9.1), exactly as AC-12 requires. `.gitignore`
+and `.vscodeignore` are likewise untouched, which is why §10.3's fix was left to a follow-up.
+
+### 10.5 Housekeeping this gate deliberately did not do
+
+- **`.vitest/` is untracked and stays untracked.** `git status --porcelain` shows
+  `?? .vitest/` during the run, and it was removed before packaging rather than ignored. It is
+  **not** committed, and `.gitignore` is **not** modified to hide it — that file is outside the
+  AC-19 allowlist (§9.3, §10.4).
+- **No test was edited to make a gate go green.** Every criterion above was run as written; the
+  two that could not pass as written (AC-02's reporter pipeline, AC-19's `main` baseline) were
+  corrected with the reason recorded, and the one that surfaced a real defect (AC-17's `.vitest/`
+  leak) was reported rather than patched.
+
