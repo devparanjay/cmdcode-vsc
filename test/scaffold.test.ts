@@ -18,6 +18,7 @@ interface Manifest {
   readonly activationEvents: readonly string[];
   readonly scripts: Readonly<Record<string, string>>;
   readonly contributes: {
+    readonly languageModelChatProviders: ReadonlyArray<{ vendor: string; displayName: string }>;
     readonly commands: ReadonlyArray<{ command: string; title: string }>;
     readonly configuration: {
       readonly properties: Readonly<Record<string, { type: string; default: unknown }>>;
@@ -51,7 +52,10 @@ describe('extension manifest', () => {
   it('declares the engine, entry point, activation event and license', () => {
     expect(manifest.engines.vscode).toBe('^1.104.0');
     expect(manifest.main).toBe('./dist/extension.js');
-    expect(manifest.activationEvents).toEqual(['onStartupFinished']);
+    expect(manifest.activationEvents).toEqual([
+      'onStartupFinished',
+      'onLanguageModelChatProvider:cmdcode',
+    ]);
     // SPDX id; `vsce` validates this field and fails packaging on an unknown value.
     expect(manifest.license).toBe('AGPL-3.0-or-later');
   });
@@ -82,6 +86,41 @@ describe('extension manifest', () => {
       expect(contribution.command.startsWith('commandcode.')).toBe(false);
       expect(contribution.title.startsWith('Cmd Code:')).toBe(true);
     }
+  });
+
+  /**
+   * The vendor id the manifest declares is the vendor VS Code admits.
+   *
+   * VS Code holds an allowlist of LM vendors, and only the
+   * `contributes.languageModelChatProviders` extension point populates it. A
+   * `vscode.lm.registerLanguageModelChatProvider` call for a vendor that is not
+   * on that list is rejected by the main process with
+   * `Chat model provider uses UNKNOWN vendor <id>.` — so the extension activates,
+   * logs success, and registers nothing.
+   *
+   * Nothing in `src/` can catch that: the id is a string literal compared to
+   * nothing, and the failure happens in another process after `activate()`
+   * resolves. This test is the only place the two halves meet.
+   */
+  it('contributes the vendor that VENDOR_ID registers under', async () => {
+    const { VENDOR_ID } = await import('../src/types.js');
+    const declared = manifest.contributes.languageModelChatProviders.map((p) => p.vendor);
+
+    expect(declared, 'contributes.languageModelChatProviders is missing or empty').toContain(
+      VENDOR_ID,
+    );
+  });
+
+  it('declares exactly one vendor, with a display name', () => {
+    const providers = manifest.contributes.languageModelChatProviders;
+    expect(providers).toHaveLength(1);
+    expect(providers[0].vendor).toBe('cmdcode');
+    // The name Copilot Chat renders next to the model list.
+    expect(providers[0].displayName).toBe('Cmd Code');
+  });
+
+  it('activates on the vendor event its own contribution generates', () => {
+    expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode');
   });
 
   it('runs the two typechecks then vitest, in that order', () => {

@@ -7,8 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1]
+
 ### Fixed
 
+- The extension registered no models in VS Code. It called
+  `vscode.lm.registerLanguageModelChatProvider('cmdcode', …)` without declaring
+  the `cmdcode` vendor in `contributes.languageModelChatProviders`, and VS Code only
+  admits a vendor that its own manifest declares. The call was rejected in the
+  extension host with `Chat model provider uses UNKNOWN vendor cmdcode.`, so the
+  model picker stayed empty — while the output channel still logged
+  `Cmd Code: activated`, because the rejection lands in another process after
+  `activate()` resolves. The CLI was found and working throughout; only the
+  registration was refused.
+
+### Added
+
+- `contributes.languageModelChatProviders` now declares the `cmdcode` vendor, which
+  is what puts Cmd Code's models in the picker and gives the extension its
+  marketplace `language-models` tag.
+- The `onLanguageModelChatProvider:cmdcode` activation event, which VS Code
+  generates from that contribution, alongside `onStartupFinished`.
+- A regression test that reads `VENDOR_ID` out of `src/types.ts` and asserts the
+  manifest declares it. The manifest and the source were two unconnected string
+  literals, so nothing failed until the provider was run inside a real VS Code.
+- The `Machine Learning` category, matching the other language model providers.
 - Concurrent turns no longer orphan a live CLI process. `cancel()` signalled only the
   newest of several overlapping runs, so an earlier run kept streaming into a chat the
   user had navigated away from.

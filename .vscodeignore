@@ -10,9 +10,11 @@ coverage/**
 .gitignore
 .vscodeignore
 docs/**
+.commandcode/**
 .artifacts/**
 .worktrees/**
 scratchpad/**
+.vitest/**
 .agentfield-out-*/
 **/tsconfig*.json
 tsup.config.ts

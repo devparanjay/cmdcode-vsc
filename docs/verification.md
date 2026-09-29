@@ -9,6 +9,9 @@ is stated.
 - **Host:** macOS/darwin arm64, node v24.13.0, `command-code@1.66.0`, VS Code 1.139.1
 - **Date:** 2026-09-28
 
+> **Addendum — 0.1.1, 2026-09-29.** §1–§10 are the original record and are left unedited, including
+> the claims that this addendum later contradicts. The defect they could not see is in §11.
+
 ## 1. `npm run check`
 
 Green from a clean tree (no `dist/`, no `node_modules/` staged, no uncommitted source).
@@ -814,4 +817,178 @@ which remains outside this diff.
   two that could not pass as written (AC-02's reporter pipeline, AC-19's `main` baseline) were
   corrected with the reason recorded, and the one that surfaced a real defect (AC-17's `.vitest/`
   leak) was reported rather than patched.
+
+## 11. 0.1.1 — the extension registered no models at all
+
+### 11.1 What the earlier record got wrong
+
+§5 M1 reported:
+
+> | Provider registers under the `cmdcode` vendor | **pass** | `vendor: "cmdcode"`, `providerRegistered: true` |
+
+and §10 AC-13 reported activation passing. **Both were true of the code and false of the product.**
+The harness in §4 supplied its own `lm.registerLanguageModelChatProvider` shim, so it recorded the
+call being *made*. It never went through VS Code's own registration path, which is where the call
+was being refused. The distinction the harness could not see:
+
+- calling `registerLanguageModelChatProvider(vendor, provider)` — what the shim recorded as `true`;
+- VS Code **accepting** that vendor — which it did not.
+
+430 passing tests never covered the second one, because every layer the tests exercise stops one
+process short of it.
+
+### 11.2 Root cause, from VS Code's own source
+
+VS Code keeps an allowlist of language model vendors. Extracted from the shipped
+`workbench.desktop.main.js` (VS Code 1.139.1):
+
+```js
+registerLanguageModelProvider(o,e){
+  if(!this._vendors.has(o)) throw new Error(`Chat model provider uses UNKNOWN vendor ${o}.`);
+```
+
+`this._vendors` is populated by exactly one extension point:
+
+```js
+registerExtensionPoint({ extensionPoint:"languageModelChatProviders", jsonSchema: …,
+  activationEventsGenerator: function*(s){ for (let o of s) yield `onLanguageModelChatProvider:${o.vendor}` } })
+```
+
+`package.json` had no `contributes.languageModelChatProviders`, so `cmdcode` was never on the list.
+`src/extension.ts:117` then called `vscode.lm.registerLanguageModelChatProvider('cmdcode', …)` and
+the main process refused it.
+
+**Why it was silent.** The throw is a rejected IPC call, not a rejected `activate()`. The output
+channel logs `Cmd Code: activated` from the extension host, before the main process's rejection
+arrives. The user sees a success message and an empty picker, with no error surfaced anywhere.
+
+Observed in the real extension host log, on two consecutive window loads of 0.1.0:
+
+```
+[error] Error: Chat model provider uses UNKNOWN vendor cmdcode.
+    at IY.registerLanguageModelProvider (workbench.desktop.main.js:626:91347)
+```
+
+### 11.3 Two hypotheses that were wrong
+
+Recorded so they are not re-investigated.
+
+- **The CLI was not on the extension host's `PATH`.** A GUI-launched app on macOS inherits a
+  minimal `PATH`, and this CLI is installed under nvm, which is not in the resolver's fixed
+  npm-global list. Simulated directly: the terminal `PATH` resolves `cmd`; the GUI `PATH` does not
+  resolve anything. But the real log says `Cmd Code: CLI resolved to cmd (path)`, and the
+  capability probe passes (`cmd --help` declares `--output-format <format> … json`). Resolution was
+  never the problem.
+- **Packaging was broken.** It was not — activation ran, 82 models were built, the bundle loaded.
+
+### 11.4 The marketplace `language-models` tag
+
+The tag that makes a provider discoverable in the marketplace is **not author-declared**. It is
+assigned by the marketplace from the presence of `contributes.languageModelChatProviders`, which is
+why the missing contribution also cost the extension its discoverability. Evidence from the
+gallery API:
+
+| Extension | declares `languageModelChatProviders` | has `language-models` tag |
+|---|---|---|
+| `github.copilot-chat` | yes | yes (and has no such keyword) |
+| `kimi-lm-provider` | yes (`moonshot`) | yes, with **no `keywords` field at all** |
+| `oai2lmapi` | yes (3 vendors) | yes, with **no `keywords` field at all** |
+| `vscode-pi-model-chat-provider` | yes (`pi`) | yes, via a hand-written `language-model-provider` keyword |
+
+So the single missing contribution explains both symptoms, and the keywords added in 0.1.1 are
+belt-and-braces rather than the mechanism.
+
+### 11.5 The fix
+
+- `contributes.languageModelChatProviders`: `[{ vendor: "cmdcode", displayName: "Cmd Code" }]`.
+- `activationEvents` gains `onLanguageModelChatProvider:cmdcode`, which VS Code generates from that
+  contribution, alongside the existing `onStartupFinished`.
+- `Machine Learning` added to `categories`, matching every other language model provider.
+- `keywords` gains `language-models` and `language model provider`.
+
+### 11.6 Regression test, and proof it fails without the fix
+
+`test/scaffold.test.ts` now imports `VENDOR_ID` from `src/types.ts` and asserts the manifest
+declares it — the two string literals that were previously unconnected. Verified by reverting the
+manifest and re-running:
+
+```
+$ node -e "…delete j.contributes.languageModelChatProviders; j.activationEvents=['onStartupFinished']…"
+$ npx vitest run test/scaffold.test.ts
+ FAIL  extension manifest > contributes the vendor that VENDOR_ID registers under
+ FAIL  extension manifest > declares exactly one vendor, with a display name
+ FAIL  extension manifest > activates on the vendor event its own contribution generates
+ FAIL  extension manifest > declares the engine, entry point, activation event and license
+ Test Files  1 failed (1)      Tests  4 failed | 9 passed (13)
+```
+
+The guard is real: it fails on the pre-fix manifest and passes on the post-fix one.
+
+### 11.7 Executed verification of the fix, in a real VS Code
+
+Everything below was run, not reasoned about. The user's own window was never reloaded; each check
+used a separate `--user-data-dir`, and every instance was shut down afterwards.
+
+**Suite** — `npm run check`: both typechecks clean, **433 passed / 0 failed** (430 + 3 new).
+
+**Packaging** — 8 files, 33.62 KB. The packaged `extension/package.json` was read back out of the
+artifact and carries the contribution:
+
+```
+version: 0.1.1
+categories: ["AI","Chat","Machine Learning"]
+activationEvents: ["onStartupFinished","onLanguageModelChatProvider:cmdcode"]
+languageModelChatProviders: [{"vendor":"cmdcode","displayName":"Cmd Code"}]
+```
+
+**Registration accepted** — trace log of a real extension host with 0.1.1 installed:
+
+```
+[LM] registering language model provider cmdcode {}
+```
+
+and **zero** occurrences of `UNKNOWN vendor`, against two in the pre-fix profile.
+
+**Vendor now recognised by chat** — `renderer.log`, `[ChatModelChanged]`, before and after:
+
+```
+before (0.1.0): vendors: agent-host-copilotcli, agent-host-claude, minimax, …      ← no cmdcode
+after  (0.1.1): vendors: cmdcode, minimax, agent-host-copilotcli, agent-host-claude, hidden
+```
+
+**All 82 models enumerable** — a throwaway probe extension called `vscode.lm.selectChatModels({})`
+in a real extension host and wrote the result to disk. The probe was removed afterwards; the user's
+extensions directory was left as found.
+
+```json
+{ "totalCount": 82, "cmdcodeCount": 82, "vendors": ["cmdcode"],
+  "allCmdcIds": true, "uniqueIds": 82,
+  "sample": ["cmdc-6d25483acfdc | DeepSeek V4 Pro (latest) | family=cmdcode", …] }
+```
+
+82 models, every id `cmdc-` + 12 hex, 82 unique. This is the first executed evidence anywhere in
+this document that the models reach VS Code at all — §5 M1 could not produce it.
+
+### 11.8 Packaging defect found and fixed here
+
+The first 0.1.1 `vsce package` shipped **13 files, 42.55 KB**, including six files under
+`extension/.commandcode/taste/`. This is the same class of leak as §10.3's `.vitest/` defect — agent
+scratch reaching a published artifact — and §10.3's recommended fix was never applied. Both are now
+closed by three lines in `.vscodeignore`:
+
+```
+.commandcode/**
+.vitest/**
+```
+
+Repackaged: **8 files, 33.62 KB**, matching the 0.1.0 content set plus the fixed manifest.
+
+### 11.9 Still unverified
+
+Copilot Chat's **chat UI rendering** of these models is still unverified, for the same reason as
+§8.1: the picker and the model list are now proven to populate, but selecting a model in a live
+Copilot Chat session and reading streamed text back into the chat pane is VS Code's own code path
+and needs a signed-in interactive session. The account on this machine is also rate-limited, so a
+live turn would have failed for an unrelated reason anyway.
+
 

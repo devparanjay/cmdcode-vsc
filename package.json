@@ -2,7 +2,7 @@
   "name": "cmdcode",
   "displayName": "Cmd Code",
   "description": "Use Command Code as a Language Model Provider in VS Code's AI features, including Copilot Chat.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "cmdcode",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -11,12 +11,15 @@
   },
   "categories": [
     "AI",
-    "Chat"
+    "Chat",
+    "Machine Learning"
   ],
   "keywords": [
     "command code",
     "cmdcode",
     "language model",
+    "language-models",
+    "language model provider",
     "copilot"
   ],
   "repository": {
@@ -25,9 +28,16 @@
   },
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onLanguageModelChatProvider:cmdcode"
   ],
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "cmdcode",
+        "displayName": "Cmd Code"
+      }
+    ],
     "commands": [
       {
         "command": "cmdcode.showLog",
