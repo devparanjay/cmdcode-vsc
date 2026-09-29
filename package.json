@@ -1,0 +1,114 @@
+{
+  "name": "cmdcode",
+  "displayName": "Cmd Code",
+  "description": "Use Command Code as a Language Model Provider in VS Code's AI features, including Copilot Chat.",
+  "version": "0.1.0",
+  "publisher": "cmdcode",
+  "license": "AGPL-3.0-or-later",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "command code",
+    "cmdcode",
+    "language model",
+    "copilot"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cmdcode/cmdcode-vsc.git"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cmdcode.showLog",
+        "title": "Cmd Code: Show Log",
+        "category": "Cmd Code"
+      },
+      {
+        "command": "cmdcode.copyDiagnostics",
+        "title": "Cmd Code: Copy Diagnostics",
+        "category": "Cmd Code"
+      },
+      {
+        "command": "cmdcode.restartProvider",
+        "title": "Cmd Code: Refresh Model List",
+        "category": "Cmd Code"
+      }
+    ],
+    "configuration": {
+      "title": "Cmd Code",
+      "properties": {
+        "cmdcode.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `command-code` CLI. Leave empty to resolve `cmd` on `PATH` automatically."
+        },
+        "cmdcode.maxTurns": {
+          "type": "number",
+          "default": 24,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum agent turns per request, passed as --max-turns. Clamped to 1-100."
+        },
+        "cmdcode.timeoutSeconds": {
+          "type": "number",
+          "default": 600,
+          "minimum": 0,
+          "description": "Wall-clock deadline for a single request, in seconds. 0 disables the deadline."
+        },
+        "cmdcode.showThinkingPlaceholder": {
+          "type": "boolean",
+          "default": true,
+          "description": "Emit a placeholder response part while the CLI starts, so the chat shows activity before the first token."
+        },
+        "cmdcode.maxPromptChars": {
+          "type": "number",
+          "default": 900000,
+          "minimum": 1000,
+          "description": "Maximum characters in the rendered prompt. History is truncated to fit; the live request never is."
+        },
+        "cmdcode.logLevel": {
+          "type": "string",
+          "enum": [
+            "error",
+            "normal",
+            "verbose"
+          ],
+          "enumDescriptions": [
+            "Only errors.",
+            "Errors plus lifecycle messages.",
+            "Everything, including NDJSON frame diagnostics."
+          ],
+          "default": "normal",
+          "description": "Verbosity of the \"Cmd Code\" output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit && vitest run",
+    "check:real-cli": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-real-cli.ts",
+    "test": "vitest run",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "1.104.0",
+    "@vscode/vsce": "^4.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.2"
+  }
+}
