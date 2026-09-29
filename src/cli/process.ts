@@ -279,6 +279,23 @@ function describeUnknown(err: unknown): string {
 }
 
 /**
+ * One spawned child and the coordination state that belongs to it alone.
+ *
+ * Every field here is per-RUN, and the bug this replaces was four pieces of per-run
+ * state living on the shared instance. `killTimer` in particular is the SIGKILL
+ * backstop for exactly this child: no other run may read, write, or clear it.
+ */
+interface RunState {
+  /** The spawned child. Never reassigned after execute() allocates the state. */
+  readonly child: ChildLike;
+  /**
+   * The SIGTERM -> SIGKILL escalation for THIS run, or null when none is armed.
+   * Armed by signal(), cleared by settle() — and by nothing else, ever.
+   */
+  killTimer: NodeJS.Timeout | null;
+}
+
+/**
  * One headless run of the CLI.
  *
  * `run` NEVER rejects. It resolves on child `close` — lifecycle-driven, never on
@@ -288,10 +305,10 @@ function describeUnknown(err: unknown): string {
  * failures (an unlocatable CLI, an oversize prompt) report and return.
  */
 export class CliTransportImpl implements CliTransport {
-  private child: ChildLike | null = null;
-  private active: Promise<void> | null = null;
-  private killTimer: NodeJS.Timeout | null = null;
-  private cancelled = false;
+  /** Every run that has spawned a child and not yet closed it. */
+  private readonly live = new Set<RunState>();
+  /** A cancel with no live child, awaiting the next run. Cleared on consumption. */
+  private pendingCancel = false;
 
   constructor(
     private readonly resolve: () => Promise<ResolvedCli | null>,
@@ -314,11 +331,12 @@ export class CliTransportImpl implements CliTransport {
       return;
     }
 
-    // A cancel that landed while the resolver was still running: the turn it
-    // belongs to has no child to kill, so the request is latched here and
-    // consumed by this run rather than silently dropped (§5.3).
-    if (this.cancelled) {
-      this.cancelled = false;
+    // A cancel that landed while the resolver was still running: that turn has no
+    // child to kill, so the request is latched here and consumed by this run rather
+    // than silently dropped (§5.3). Only reachable when NO run is live — a cancel
+    // aimed at a live run (§P4) must not latch against a future one.
+    if (this.pendingCancel) {
+      this.pendingCancel = false;
       this.log.info('Cmd Code: cancelled before the run started');
       handlers.onError(new CliError('interrupted', 'the run was cancelled before it started'));
       return;
@@ -351,34 +369,25 @@ export class CliTransportImpl implements CliTransport {
       `Cmd Code: spawning ${cli.command} ${[...cli.args, ...redactArgs(args)].join(' ')}`,
     );
 
-    const run = this.execute(req, cli, args, handlers);
-    this.active = run;
-    try {
-      await run;
-    } finally {
-      // Cleared last, so a cancel() racing the close still has something to
-      // await and a cancel() after this point resolves immediately (§5.3).
-      if (this.active === run) {
-        this.active = null;
-      }
-    }
+    await this.execute(req, cli, args, handlers);
   }
 
   async cancel(): Promise<void> {
-    const child = this.child;
-    if (child === null) {
-      // §5.3: a cancel with no live child resolves immediately. VS Code may
-      // cancel before the first spawn, and that turn must still not run.
-      if (this.active === null) {
-        this.cancelled = true;
-      }
+    if (this.live.size === 0) {
+      // §5.3: a cancel with no live child latches, and the NEXT run consumes the
+      // latch. VS Code may cancel before the first spawn, and that turn must
+      // still not run. A cancel aimed at a live run signals it instead and must
+      // not latch: the next turn the user starts is a new intent.
+      this.pendingCancel = true;
       this.log.info('Cmd Code: cancel with no live child');
       return;
     }
-    this.signal(child, 'cancellation requested');
-    if (this.active !== null) {
-      await this.active;
+    for (const state of [...this.live]) {
+      this.signal(state, 'cancellation requested');
     }
+    // Deliberately no await: §P5. A cancel that waited on a child's completion
+    // would wait on the very behaviour it just requested. The per-run SIGKILL
+    // escalation is the backstop for a child that ignores SIGTERM.
   }
 
   async describe(): Promise<string | null> {
@@ -395,16 +404,16 @@ export class CliTransportImpl implements CliTransport {
   }
 
   /** SIGTERM now, SIGKILL after KILL_GRACE_MS if the child is still there. */
-  private signal(child: ChildLike, reason: string): void {
+  private signal(state: RunState, reason: string): void {
     this.log.info(`Cmd Code: ${reason}; sending SIGTERM`);
-    child.kill('SIGTERM');
-    if (this.killTimer !== null) {
-      return; // an escalation is already armed
+    state.child.kill('SIGTERM');
+    if (state.killTimer !== null) {
+      return; // an escalation is already armed FOR THIS RUN
     }
-    this.killTimer = setTimeout(() => {
-      this.killTimer = null;
+    state.killTimer = setTimeout(() => {
+      state.killTimer = null;
       this.log.error('Cmd Code: SIGKILL after KILL_GRACE_MS');
-      child.kill('SIGKILL');
+      state.child.kill('SIGKILL');
     }, KILL_GRACE_MS);
   }
 
@@ -466,12 +475,16 @@ export class CliTransportImpl implements CliTransport {
         if (deadline !== null) {
           clearTimeout(deadline);
         }
-        if (this.killTimer !== null) {
-          clearTimeout(this.killTimer);
-          this.killTimer = null;
-        }
-        if (this.child === child) {
-          this.child = null;
+        // The narrowing happens once, here: the spawn-throw path runs with no
+        // state at all, and under the old shared field it destroyed whichever
+        // OTHER run's escalation happened to be armed.
+        const owned: RunState | null = state;
+        if (owned !== null) {
+          if (owned.killTimer !== null) {
+            clearTimeout(owned.killTimer);
+            owned.killTimer = null;
+          }
+          this.live.delete(owned);
         }
         this.log.info(
           `Cmd Code: exited ${code === null ? 'on a signal' : `with code ${code}`}; ` +
@@ -512,6 +525,7 @@ export class CliTransportImpl implements CliTransport {
 
       let child: ChildLike | null = null;
       let deadline: NodeJS.Timeout | null = null;
+      let state: RunState | null = null;
       try {
         child = this.spawnFn(cli.command, [...cli.args, ...args], {
           cwd: req.cwd,
@@ -525,7 +539,11 @@ export class CliTransportImpl implements CliTransport {
         settle(ExitCode.Error);
         return;
       }
-      this.child = child;
+      // After the try/catch, so a spawn that threw never enters the registry:
+      // `live` holds exactly the runs with a spawned, not-yet-closed child.
+      const run: RunState = { child, killTimer: null };
+      this.live.add(run);
+      state = run; // the binding the hoisted `settle` closes over
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       child.stdout.on('data', (chunk: Buffer | string) => {
@@ -557,12 +575,14 @@ export class CliTransportImpl implements CliTransport {
       });
 
       // §5.4: the deadline is armed after the spawn, so a turn cannot be timed
-      // out by a resolver that was slow. 0 disables it.
+      // out by a resolver that was slow. 0 disables it. The callback captures
+      // the non-null `run` const, never the nullable `state` hoisted above:
+      // narrowing does not carry into a deferred function, so `state` would
+      // widen back to `RunState | null` here and fail to typecheck.
       if (req.timeoutMs > 0) {
-        const live = child;
         deadline = setTimeout(() => {
           timedOut = true;
-          this.signal(live, 'deadline reached');
+          this.signal(run, 'deadline reached');
         }, req.timeoutMs);
       }
     });
