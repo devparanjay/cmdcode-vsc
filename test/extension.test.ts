@@ -431,9 +431,9 @@ const CLAMP_TABLE: ReadonlyArray<{
     expected: { cliPath: '' },
   },
   {
-    name: 'booleans and the log level pass through unclamped',
-    settings: { showThinkingPlaceholder: false, logLevel: 'verbose' },
-    expected: { showThinkingPlaceholder: false, logLevel: 'verbose' },
+    name: 'the log level passes through unclamped',
+    settings: { logLevel: 'verbose' },
+    expected: { logLevel: 'verbose' },
   },
 ];
 

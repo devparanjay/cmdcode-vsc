@@ -2,7 +2,7 @@
   "name": "cmdcode",
   "displayName": "Command Code",
   "description": "Use Command Code as a Language Model Provider in VS Code's AI features, including Copilot Chat.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "cmdcode",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -75,11 +75,6 @@
           "default": 600,
           "minimum": 0,
           "description": "Wall-clock deadline for a single request, in seconds. 0 disables the deadline."
-        },
-        "cmdcode.showThinkingPlaceholder": {
-          "type": "boolean",
-          "default": true,
-          "description": "Emit a placeholder response part while the CLI starts, so the chat shows activity before the first token."
         },
         "cmdcode.maxPromptChars": {
           "type": "number",

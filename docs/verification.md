@@ -1155,6 +1155,64 @@ Next step when this is picked up: authenticate and enumerate the real `/alpha/*`
 assuming a compatibility shim, and confirm whether a tool-result channel exists at all — without
 one, a direct transport hits the same `suitableForAgentMode` ceiling.
 
+### 11.13 0.1.3 — the "Working…" placeholder was being sent as answer content
+
+**Symptom, reported by the user after 0.1.2 was confirmed working end to end:**
+
+```
+Working…Hello! I'm working in the `cmdcode-vsc` VS Code extension project. How can I help you today?
+```
+
+Every reply in every session carried the prefix.
+
+**Cause.** `src/chat-provider.ts` reported a `LanguageModelTextPart('Working…')`
+before spawning the CLI, to cover the ~3–4 s cold start. The original comment
+claimed *"VS Code has no retract API, so this stays in the transcript"* — which
+identifies the bug as the design rather than denying it. Every part handed to
+`progress` becomes response **content**; there is no separate status channel, so
+a placeholder emitted as a text part is indistinguishable from model output and
+is prepended to it forever.
+
+**Why it cannot be reworded or re-typed.** The stable API has no non-content channel:
+
+```ts
+export type LanguageModelResponsePart =
+  | LanguageModelTextPart | LanguageModelToolResultPart | LanguageModelToolCallPart;
+```
+
+All three are content. `ProvideLanguageModelChatResponseOptions` exposes only
+`modelOptions`, `tools` and `toolMode` — no `progress` handle, and `vscode.Progress`
+is not passed to a provider. The workbench offers no `thinkingDelta` /
+`thinking_delta` part type either (0 occurrences in `workbench.desktop.main.js`).
+So any pre-answer text the extension emits is, by construction, part of the answer.
+
+**Fix.** The placeholder is removed, not restyled. `cmdcode.showThinkingPlaceholder`
+is deleted from the manifest, `CmdCodeConfig`, `CONFIG_DEFAULTS` and the README —
+it only ever controlled whether a fabricated token was prepended, so leaving it as
+a no-op would be worse than removing it. Copilot renders its own pending state
+while a provider is awaited, so the wait is still visibly busy.
+
+The working reference provider emits no placeholder either; it streams nothing
+until the model's first delta (`minimax-provider/src/MiniMaxProvider.ts`).
+
+**Tests now assert the absence**, so "helpful" status text cannot be
+reintroduced:
+
+| Test | Asserts |
+|---|---|
+| `reports nothing before the model produces its first token` | first part is the model's own text; no match for `/working\|thinking\|please wait\|\.\.\./i` |
+| `emits no fabricated content at all when the model says nothing` | a silent run yields exactly one part, the explanation |
+| `emits exactly one explanatory part when both the deltas and the text are empty` | `toHaveLength(1)`, not 2 |
+| `forwards each delta as its own part` | `['a', 'b\n']`, no leading token |
+| `streams every text_delta in arrival order` | `['Hello', ', ', 'world']`, 3 parts not 4 |
+
+The two zero-delta tests previously asserted `toHaveLength(2)` — placeholder plus
+explanation. Both corrected to 1; a failing run here caught them rather than the
+change going unnoticed.
+
+`npm run check`: **436 passed / 0 failed**. Packaged 8 files.
+
+
 
 
 

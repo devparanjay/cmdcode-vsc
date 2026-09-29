@@ -45,10 +45,16 @@ Measured on a typical machine:
 - A whole short turn is usually ~3 seconds; a resumed turn within the same chat reuses a cached
   prefix and can be slightly faster.
 
-To make the wait feel less empty, the extension emits a short placeholder part and then streams
-the answer token by token as it arrives, so you see progress instead of a spinner. If a turn
-outruns `cmdcode.timeoutSeconds`, it is stopped and reported as a timeout rather than retried — a
-retry would double your token spend for a latency win you may not want.
+The answer then streams token by token as it arrives, so you see output rather than a spinner. If a
+turn outruns `cmdcode.timeoutSeconds`, it is stopped and reported as a timeout rather than retried —
+a retry would double your token spend for a latency win you may not want.
+
+> **No placeholder text.** Earlier releases emitted a `Working…` part before the first token, to
+> fill the wait. Every part reported to VS Code becomes response *content* and cannot be retracted,
+> so it was permanently prefixed to the model's reply (`"Working…Hello! I'm working in the…"`). The
+> stable API has no non-content channel for it — `LanguageModelResponsePart` is a closed union of
+> three content-bearing types, and the provider options carry no progress handle — so the fake
+> token was removed rather than reworded. Copilot shows its own pending state while it waits.
 
 ## Limitations (please read)
 
@@ -100,7 +106,6 @@ never writes to the Command Code config or its opt-out keys.
 | `cmdcode.cliPath` | string | `""` | Absolute path to the CLI. Empty resolves `cmd` on `PATH`. If the path you set is missing or not executable, resolution falls back to `PATH` — check **Cmd Code: Show Log** to see which one was actually chosen. |
 | `cmdcode.maxTurns` | number | `24` | Agent turns per request (`--max-turns`), clamped 1–100. |
 | `cmdcode.timeoutSeconds` | number | `600` | Wall-clock deadline per request. `0` disables it. |
-| `cmdcode.showThinkingPlaceholder` | boolean | `true` | Show a placeholder while the CLI starts. |
 | `cmdcode.maxPromptChars` | number | `900000` | Cap on rendered prompt size; history is truncated to fit. |
 | `cmdcode.logLevel` | enum | `normal` | Output-channel verbosity: `error`, `normal`, `verbose`. |
 

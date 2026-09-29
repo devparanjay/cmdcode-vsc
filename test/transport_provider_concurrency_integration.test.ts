@@ -383,11 +383,11 @@ describe('provider × transport: cancelling one of two overlapping turns', () =>
 
     // Turn A: 'interrupted' is swallowed by the provider (§5.3 — no error dialog),
     // and the text that already streamed stays put, because VS Code has no retract.
-    expect(progressA.texts).toEqual(['Working…', 'A-hello']);
+    expect(progressA.texts).toEqual(['A-hello']);
 
     // Turn B: the SIGTERM was sent, but the run had already produced its answer,
     // so the exit code still decides. One summary, reported in order.
-    expect(progressB.texts).toEqual(['Working…', 'B-', 'world']);
+    expect(progressB.texts).toEqual(['B-', 'world']);
     expect(progressB.texts.filter((t) => t === 'B-world')).toHaveLength(0);
 
     // Only B is a success, so only B persists a session id.
@@ -747,7 +747,7 @@ describe('provider × transport: the pre-spawn cancel latch through the provider
     h.latest().emit('close', ExitCode.Success);
     await turn;
 
-    expect(progress.texts).toEqual(['Working…', 'PONG']);
+    expect(progress.texts).toEqual(['PONG']);
     expect(store.get(CHAT_ID)).toBe('session-latch');
   });
 });

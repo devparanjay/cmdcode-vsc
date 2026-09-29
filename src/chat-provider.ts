@@ -14,14 +14,6 @@ import {
   type RunSummary,
 } from './types.js';
 
-/**
- * Short; VS Code has no retract API, so this stays in the transcript.
- *
- * The CLI needs ~3-4 s to produce its first token (§6.2), and silence reads as a
- * hang, so a placeholder is reported before the run starts.
- */
-const THINKING_PLACEHOLDER = 'Working…';
-
 const EMPTY_RESPONSE_MESSAGE =
   'Command Code finished without returning any text. See the Cmd Code log.';
 
@@ -97,9 +89,23 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
 
     const resumeSessionId = this.store.get(model.id);
 
-    if (this.config.showThinkingPlaceholder) {
-      progress.report(new vscode.LanguageModelTextPart(THINKING_PLACEHOLDER));
-    }
+    // No placeholder is reported here. The CLI needs ~3-4 s to produce its first
+    // token (§6.2), and this used to fill that silence with a `Working…` text
+    // part — but every part reported to `progress` becomes response *content*.
+    // VS Code concatenates them into the answer with no retract, so the
+    // placeholder was permanently prefixed to the model's reply:
+    //
+    //   "Working…Hello! I'm working in the cmdcode-vsc VS Code extension…"
+    //
+    // The stable API offers no non-content channel for this. `LanguageModelResponsePart`
+    // is a closed union of `LanguageModelTextPart | LanguageModelToolResultPart |
+    // LanguageModelToolCallPart` — all of which are content — and
+    // `ProvideLanguageModelChatResponseOptions` carries no `progress` handle. The
+    // CLI's own tool loop has no streaming status to forward either.
+    //
+    // Copilot renders its own pending state while awaiting the provider, so the
+    // wait is still visibly busy; a fake token is not needed to avoid a spinner.
+    // See docs/verification.md §11.13.
 
     // The transport is not a caller: it fills these in from callbacks, which
     // control-flow analysis cannot follow. A mutable record (rather than four

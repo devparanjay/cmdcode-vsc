@@ -35,7 +35,6 @@ const CONFIG_DEFAULTS: Readonly<Record<string, { type: string; default: unknown 
   'cmdcode.cliPath': { type: 'string', default: '' },
   'cmdcode.maxTurns': { type: 'number', default: 24 },
   'cmdcode.timeoutSeconds': { type: 'number', default: 600 },
-  'cmdcode.showThinkingPlaceholder': { type: 'boolean', default: true },
   'cmdcode.maxPromptChars': { type: 'number', default: 900_000 },
   'cmdcode.logLevel': { type: 'string', default: 'normal' },
 };

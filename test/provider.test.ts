@@ -190,11 +190,12 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — streaming (AC
       token as never,
     );
 
-    // Placeholder first, then the three deltas in order. Buffering until close
+    // The three deltas arrive as three separate parts. Buffering until close
     // would still produce the same concatenation — the per-delta parts prove it
     // did not, because three separate parts arrived rather than one joined one.
-    expect(progress.texts).toEqual(['Working…', 'Hello', ', ', 'world']);
-    expect(progress.parts).toHaveLength(4);
+    // The first part is the model's own text: nothing is prepended.
+    expect(progress.texts).toEqual(['Hello', ', ', 'world']);
+    expect(progress.parts).toHaveLength(3);
     expect(store.get(CHAT_ID)).toBe(SESSION_ID);
   });
 
@@ -213,12 +214,28 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — streaming (AC
 
     // An empty delta is dropped by the transport; a delta carrying a newline is
     // passed through verbatim, because trimming would corrupt legitimate output.
-    expect(progress.texts).toEqual(['Working…', 'a', 'b\n']);
+    expect(progress.texts).toEqual(['a', 'b\n']);
   });
 
-  it('omits the placeholder part when cmdcode.showThinkingPlaceholder is false (AC-16)', async () => {
-    const { provider, transport, token } = harness({ showThinkingPlaceholder: false });
-    transport.nextFrames = [textDelta('answer')];
+  /**
+   * The first reported part must be the model's own first token.
+   *
+   * This extension used to report a `Working…` text part before the run started,
+   * to fill the ~3-4 s the CLI takes to produce its first token. Every part
+   * reported to `progress` becomes response *content* and cannot be retracted, so
+   * that placeholder was permanently prefixed to the reply:
+   *
+   *   "Working…Hello! I'm working in the cmdcode-vsc VS Code extension…"
+   *
+   * The stable API has no non-content channel for it — `LanguageModelResponsePart`
+   * is a closed union of three content-bearing part types, and
+   * `ProvideLanguageModelChatResponseOptions` carries no progress handle — so the
+   * placeholder was removed rather than reworded. These assertions exist to stop
+   * any "helpful" status text being reintroduced.
+   */
+  it('reports nothing before the model produces its first token', async () => {
+    const { provider, transport, token } = harness();
+    transport.nextFrames = [textDelta('Hello')];
 
     const progress = recordingProgress();
     await provider.provideLanguageModelChatResponse(
@@ -229,7 +246,25 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — streaming (AC
       token as never,
     );
 
-    expect(progress.texts).toEqual(['answer']);
+    expect(progress.texts).toEqual(['Hello']);
+    expect(progress.texts[0]).not.toMatch(/working|thinking|please wait|\.\.\./i);
+  });
+
+  it('emits no fabricated content at all when the model says nothing', async () => {
+    // A silent run must not be padded with a placeholder to look busy.
+    const { provider, transport, token } = harness();
+    transport.nextFrames = [runStart()];
+
+    const progress = recordingProgress();
+    await provider.provideLanguageModelChatResponse(
+      chatInformation(CHAT_ID),
+      [user('hi')],
+      {} as never,
+      progress as never,
+      token as never,
+    );
+
+    expect(progress.texts).toEqual(['Command Code finished without returning any text. See the Cmd Code log.']);
   });
 
   it('projects config and the resume hint onto the RunRequest', async () => {
@@ -276,7 +311,7 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — zero-delta ru
     // The placeholder plus the summary. This is the case the previous iteration's
     // two overlapping rules disagreed about: a success with `finalText: 'PONG'`
     // and no deltas emits PONG, not an explanatory message.
-    expect(progress.texts).toEqual(['Working…', 'PONG']);
+    expect(progress.texts).toEqual(['PONG']);
   });
 
   it('emits exactly one explanatory part when both the deltas and the text are empty', async () => {
@@ -293,8 +328,9 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — zero-delta ru
     );
 
     // Copilot renders an empty response as a hang, so silence is never correct.
-    expect(progress.texts).toHaveLength(2);
-    expect(progress.texts[1]).toBe(
+    // Exactly one part: the explanation. Nothing is prepended to it.
+    expect(progress.texts).toHaveLength(1);
+    expect(progress.texts[0]).toBe(
       'Command Code finished without returning any text. See the Cmd Code log.',
     );
   });
@@ -316,8 +352,8 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — zero-delta ru
       new FakeCancellationToken() as never,
     );
 
-    expect(progress.texts).toHaveLength(2);
-    expect(progress.texts[1]).toContain('without returning any text');
+    expect(progress.texts).toHaveLength(1);
+    expect(progress.texts[0]).toContain('without returning any text');
   });
 });
 
@@ -421,7 +457,7 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — cancellation 
     // The child was signalled, no throw surfaced, and the partial text that had
     // already streamed stays put — VS Code has no retract API.
     expect(transport.cancelCount).toBe(1);
-    expect(progress.texts).toEqual(['Working…', 'partial']);
+    expect(progress.texts).toEqual(['partial']);
     // A cancelled turn is not a success, so nothing is persisted.
     expect(store.get(CHAT_ID)).toBeNull();
   });

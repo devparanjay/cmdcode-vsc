@@ -153,7 +153,6 @@ function readConfig(): CmdCodeConfig {
     timeoutMs: Number.isFinite(timeoutSeconds)
       ? Math.max(0, Math.round(timeoutSeconds) * 1000)
       : CONFIG_DEFAULTS.timeoutMs,
-    showThinkingPlaceholder: c.get<boolean>('showThinkingPlaceholder', true),
     maxPromptChars: Number.isFinite(maxPromptChars)
       ? Math.max(1_000, Math.round(maxPromptChars))
       : CONFIG_DEFAULTS.maxPromptChars,

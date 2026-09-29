@@ -7,6 +7,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3]
+
+### Fixed
+
+- Every reply was prefixed with `Working…`. The extension reported a
+  `LanguageModelTextPart('Working…')` before the first token to fill the ~3–4 s
+  the CLI takes to start, but every part reported to `progress` becomes
+  response **content** and cannot be retracted — so the placeholder stayed in
+  the transcript permanently:
+
+      Working…Hello! I'm working in the cmdcode-vsc VS Code extension…
+
+  The stable API offers no non-content channel for it. `LanguageModelResponsePart`
+  is a closed union of `LanguageModelTextPart | LanguageModelToolResultPart |
+  LanguageModelToolCallPart` — all content — and
+  `ProvideLanguageModelChatResponseOptions` carries no progress handle. The
+  placeholder is removed rather than reworded; Copilot renders its own pending
+  state while it waits.
+
+### Removed
+
+- `cmdcode.showThinkingPlaceholder`. It only ever controlled whether a fabricated
+  token was prepended to the answer, and the answer should never contain one.
+  The setting is gone from the manifest, `CmdCodeConfig`, `CONFIG_DEFAULTS` and
+  the README rather than left as a no-op.
+
+### Changed
+
+- The provider now emits nothing before the model's first token. Tests assert
+  this directly, including that a silent run produces exactly one part (the
+  explanation) and no padding.
+
 ## [0.1.2]
 
 ### Fixed

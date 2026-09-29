@@ -74,8 +74,6 @@ export interface CmdCodeConfig {
   readonly maxTurns: number;
   /** `cmdcode.timeoutSeconds` × 1000. 0 disables the deadline. */
   readonly timeoutMs: number;
-  /** `cmdcode.showThinkingPlaceholder` — emit the leading placeholder part. */
-  readonly showThinkingPlaceholder: boolean;
   /** `cmdcode.maxPromptChars` → buildPrompt({maxChars}). */
   readonly maxPromptChars: number;
   /** `cmdcode.logLevel` → createLogger(). */
@@ -86,7 +84,6 @@ export const CONFIG_DEFAULTS: Readonly<CmdCodeConfig> = Object.freeze({
   cliPath: '',
   maxTurns: 24,
   timeoutMs: 600_000,
-  showThinkingPlaceholder: true,
   maxPromptChars: 900_000,
   logLevel: 'normal',
 });
