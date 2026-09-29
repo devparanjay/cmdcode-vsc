@@ -454,7 +454,7 @@ describe('a real child that fails: exit code -> CliError -> user-facing copy', (
     expect(turn.error?.code).toBe('malformed-stream');
     expect(turn.sawResultFrame).toBe(false);
     const copy = toPresentation(turn.error!).message;
-    expect(copy).toBe("Command Code sent output this extension couldn't read. See the Cmd Code log.");
+    expect(copy).toBe("Command Code sent output this extension couldn't read. See the Command Code log.");
     // The offending bytes never reach the user, and nothing was cached.
     expect(copy).not.toContain('NDJSON');
     expect(store.get(MODEL)).toBeNull();

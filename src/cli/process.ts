@@ -72,7 +72,7 @@ export function classify(input: ClassifyInput): CliError | null {
   // 1. Our own deadline outranks everything, including the 130 its own SIGTERM
   //    produces — otherwise a hung CLI and a user cancel are indistinguishable.
   if (timedOut) {
-    return new CliError('timeout', 'the Cmd Code deadline fired', { stderr, exitCode });
+    return new CliError('timeout', 'the Command Code deadline fired', { stderr, exitCode });
   }
 
   // 2. A user cancel (SIGTERM → exit 130) or a death by signal (exitCode null).
@@ -326,7 +326,7 @@ export class CliTransportImpl implements CliTransport {
     try {
       cli = await this.resolve();
     } catch (err) {
-      this.log.error(`Cmd Code: CLI resolution failed: ${describeUnknown(err)}`);
+      this.log.error(`Command Code: CLI resolution failed: ${describeUnknown(err)}`);
       handlers.onError(new CliError('cli-not-found', 'the CLI could not be located'));
       return;
     }
@@ -337,7 +337,7 @@ export class CliTransportImpl implements CliTransport {
     // aimed at a live run (§P4) must not latch against a future one.
     if (this.pendingCancel) {
       this.pendingCancel = false;
-      this.log.info('Cmd Code: cancelled before the run started');
+      this.log.info('Command Code: cancelled before the run started');
       handlers.onError(new CliError('interrupted', 'the run was cancelled before it started'));
       return;
     }
@@ -346,7 +346,7 @@ export class CliTransportImpl implements CliTransport {
     try {
       args = buildArgs(req); // throws before any process is created
     } catch (err) {
-      this.log.error(`Cmd Code: ${describeUnknown(err)}`);
+      this.log.error(`Command Code: ${describeUnknown(err)}`);
       handlers.onError(
         err instanceof CliError ? err : new CliError('unknown', 'the request could not be built'),
       );
@@ -354,7 +354,7 @@ export class CliTransportImpl implements CliTransport {
     }
 
     if (cli === null) {
-      this.log.error('Cmd Code: the CLI could not be located');
+      this.log.error('Command Code: the CLI could not be located');
       handlers.onError(new CliError('cli-not-found', 'the CLI could not be located'));
       return;
     }
@@ -366,7 +366,7 @@ export class CliTransportImpl implements CliTransport {
     // `cli.args` leads the real spawn argv, so the line has to carry it too or
     // the npm-global mode would name a node binary with no entry point.
     this.log.info(
-      `Cmd Code: spawning ${cli.command} ${[...cli.args, ...redactArgs(args)].join(' ')}`,
+      `Command Code: spawning ${cli.command} ${[...cli.args, ...redactArgs(args)].join(' ')}`,
     );
 
     await this.execute(req, cli, args, handlers);
@@ -379,7 +379,7 @@ export class CliTransportImpl implements CliTransport {
       // still not run. A cancel aimed at a live run signals it instead and must
       // not latch: the next turn the user starts is a new intent.
       this.pendingCancel = true;
-      this.log.info('Cmd Code: cancel with no live child');
+      this.log.info('Command Code: cancel with no live child');
       return;
     }
     for (const state of [...this.live]) {
@@ -405,14 +405,14 @@ export class CliTransportImpl implements CliTransport {
 
   /** SIGTERM now, SIGKILL after KILL_GRACE_MS if the child is still there. */
   private signal(state: RunState, reason: string): void {
-    this.log.info(`Cmd Code: ${reason}; sending SIGTERM`);
+    this.log.info(`Command Code: ${reason}; sending SIGTERM`);
     state.child.kill('SIGTERM');
     if (state.killTimer !== null) {
       return; // an escalation is already armed FOR THIS RUN
     }
     state.killTimer = setTimeout(() => {
       state.killTimer = null;
-      this.log.error('Cmd Code: SIGKILL after KILL_GRACE_MS');
+      this.log.error('Command Code: SIGKILL after KILL_GRACE_MS');
       state.child.kill('SIGKILL');
     }, KILL_GRACE_MS);
   }
@@ -487,7 +487,7 @@ export class CliTransportImpl implements CliTransport {
           this.live.delete(owned);
         }
         this.log.info(
-          `Cmd Code: exited ${code === null ? 'on a signal' : `with code ${code}`}; ` +
+          `Command Code: exited ${code === null ? 'on a signal' : `with code ${code}`}; ` +
             `${reader.frameCount()} frames, ${stdoutBytes} stdout bytes`,
         );
 
@@ -507,7 +507,7 @@ export class CliTransportImpl implements CliTransport {
             timedOut,
           });
         if (error !== null) {
-          this.log.error(`Cmd Code: [${error.code}] ${error.message}`);
+          this.log.error(`Command Code: [${error.code}] ${error.message}`);
           handlers.onError(error);
           resolveRun();
           return;
@@ -534,7 +534,7 @@ export class CliTransportImpl implements CliTransport {
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (err) {
-        this.log.error(`Cmd Code: spawn failed: ${describeUnknown(err)}`);
+        this.log.error(`Command Code: spawn failed: ${describeUnknown(err)}`);
         spawnError = new CliError('spawn-failed', 'the CLI process could not be started');
         settle(ExitCode.Error);
         return;
@@ -559,7 +559,7 @@ export class CliTransportImpl implements CliTransport {
         }
       });
       child.on('error', (err: unknown) => {
-        this.log.error(`Cmd Code: child error: ${describeUnknown(err)}`);
+        this.log.error(`Command Code: child error: ${describeUnknown(err)}`);
         if (spawnError === null) {
           spawnError = new CliError('spawn-failed', 'the CLI process could not be started');
         }

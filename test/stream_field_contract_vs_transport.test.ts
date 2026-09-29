@@ -222,7 +222,7 @@ describe('a stream error reaches the user as copy, not as stream content', () =>
     expect(handlers.errors[0]!.code).toBe('malformed-stream');
     const presentation = toPresentation(handlers.errors[0]!);
     expect(presentation.message).toBe(
-      "Command Code sent output this extension couldn't read. See the Cmd Code log.",
+      "Command Code sent output this extension couldn't read. See the Command Code log.",
     );
     // Neither the model id nor the offending secret reaches the notification.
     expect(presentation.message).not.toContain(MODEL);

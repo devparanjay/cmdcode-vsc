@@ -264,7 +264,7 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — streaming (AC
       token as never,
     );
 
-    expect(progress.texts).toEqual(['Command Code finished without returning any text. See the Cmd Code log.']);
+    expect(progress.texts).toEqual(['Command Code finished without returning any text. See the Command Code log.']);
   });
 
   it('projects config and the resume hint onto the RunRequest', async () => {
@@ -331,7 +331,7 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — zero-delta ru
     // Exactly one part: the explanation. Nothing is prepended to it.
     expect(progress.texts).toHaveLength(1);
     expect(progress.texts[0]).toBe(
-      'Command Code finished without returning any text. See the Cmd Code log.',
+      'Command Code finished without returning any text. See the Command Code log.',
     );
   });
 
@@ -380,7 +380,7 @@ describe('CmdCodeChatProvider.provideLanguageModelChatResponse — the error bri
 
     expect(error).toBeInstanceOf(CliError);
     expect((error as CliError).code).toBe('unknown');
-    expect((error as CliError).message).toBe('Command Code failed. See the Cmd Code log.');
+    expect((error as CliError).message).toBe('Command Code failed. See the Command Code log.');
   });
 
   it('keeps raw stderr in the log and out of the thrown message', async () => {

@@ -15,7 +15,7 @@ import {
 } from './types.js';
 
 const EMPTY_RESPONSE_MESSAGE =
-  'Command Code finished without returning any text. See the Cmd Code log.';
+  'Command Code finished without returning any text. See the Command Code log.';
 
 /**
  * Verified averages: 18570/3, 18577/60, 18601/3 input/output. Exact tokenization

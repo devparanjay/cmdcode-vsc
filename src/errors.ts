@@ -39,7 +39,7 @@ export function toPresentation(error: CliError): ErrorPresentation {
       };
     case 'spawn-failed':
       return {
-        message: 'Command Code could not be started. See the Cmd Code log.',
+        message: 'Command Code could not be started. See the Command Code log.',
         action: SHOW_LOG,
         command: 'cmdcode.showLog',
       };
@@ -105,19 +105,19 @@ export function toPresentation(error: CliError): ErrorPresentation {
       };
     case 'no-response':
       return {
-        message: 'Command Code ended without an answer. See the Cmd Code log.',
+        message: 'Command Code ended without an answer. See the Command Code log.',
         action: SHOW_LOG,
         command: 'cmdcode.showLog',
       };
     case 'malformed-stream':
       return {
-        message: "Command Code sent output this extension couldn't read. See the Cmd Code log.",
+        message: "Command Code sent output this extension couldn't read. See the Command Code log.",
         action: SHOW_LOG,
         command: 'cmdcode.showLog',
       };
     case 'unknown':
       return {
-        message: 'Command Code failed. See the Cmd Code log.',
+        message: 'Command Code failed. See the Command Code log.',
         action: SHOW_LOG,
         command: 'cmdcode.showLog',
       };

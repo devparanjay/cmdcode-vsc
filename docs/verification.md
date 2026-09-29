@@ -1212,6 +1212,68 @@ change going unnoticed.
 
 `npm run check`: **436 passed / 0 failed**. Packaged 8 files.
 
+### 11.14 0.2.0 — marketplace identity, icon, and README
+
+**Identity.** The extension moved from `cmdcode.cmdcode` to
+`devparanjay.command-code-provider`, with the display name `Command Code Provider`. This is a new
+marketplace identity: VS Code treats it as an unrelated extension, so existing installs are not
+upgraded and must be reinstalled. Verified by installing the artifact and reading
+`code --list-extensions`, which now reports `devparanjay.command-code-provider` and nothing else
+after the old id was removed.
+
+Three names are now deliberately distinct, and a new test pins the split:
+
+| Name | Value | Changes when? |
+| --- | --- | --- |
+| Marketplace id | `devparanjay.command-code-provider` | freely — it is packaging metadata |
+| Provider vendor id | `cmdcode` (`VENDOR_ID`) | **never** — it is hashed into every `cmdc-` model id |
+| Settings / commands | `cmdcode.*` | **never** — users' `settings.json` and keybindings depend on it |
+
+The settings namespace is independent of the publisher, so renaming it would have silently reset
+every user's configuration. `keeps the cmdcode.* settings and command namespace` asserts this so a
+future rename cannot quietly break it.
+
+**Icon.** Built from the vendor's own `symbol.svg`
+(`https://raw.githubusercontent.com/CommandCodeAI/command-code/…/symbols/symbol.svg`, referenced
+from <https://commandcode.ai/brand>) with a `PROVIDER` caption strip added beneath the mark.
+
+Worth recording: the first attempt hand-transcribed the SVG paths into a pixel buffer and produced
+a broken mark — a black square with no glyph and a scrambled caption. Two real problems, both caught
+by looking at the output image rather than by the script:
+
+1. The glyph paths are `M … v … h … z` **curve** subpaths, not the rectangles the transcription
+   assumed, so nothing was drawn.
+2. The banner font was a hand-rolled 5×7 bitmap whose column bytes were indexed in the wrong
+   direction, rendering the word backwards and overlapping.
+
+`scripts/make_icon.py` now rasterises the vendor SVG with `rsvg-convert` and renders the caption
+with a real system font via Pillow, so neither the mark nor the text is re-implemented. The
+128×128 result was inspected at 128, 64, 32 and 16 px: the mark stays legible at 16 px and
+`PROVIDER` is still readable. The old `scripts/make-icon.mjs` (unrelated placeholder artwork, which
+documented itself as *not* the vendor mark) is deleted.
+
+**Branding consistency.** Command titles, the output channel, and the log prefix moved from
+`Cmd Code` to `Command Code`; command **ids** did not. Verified in a live extension host:
+
+```
+[info] Command Code: activating (logLevel=normal, models=82)
+[info] Command Code: CLI resolved to cmd (path)
+[info] Command Code: activated
+[LM] registering language model provider cmdcode {}      ← 0 UNKNOWN vendor
+```
+
+**README** rewritten for the Marketplace and GitHub, including a Trademarks and affiliation section
+and a license/warranty section. Its factual claims were checked against the code rather than
+written from memory: command titles and ids, the five settings and their defaults, the log lines
+quoted in the troubleshooting table, the 82-model count, and the CLI version (1.69.0). Two claims
+were corrected as a result — the command titles in the draft said "Command Code:" while the manifest
+still said "Cmd Code:", and the log examples quoted the old prefix.
+
+`npm run check`: **437 passed / 0 failed**. Packaged 8 files, 46.11 KB. `scripts/**` is in
+`.vscodeignore`, so the generator and the vendored `symbol.svg` stay out of the artifact — confirmed
+by reading the file list back out of the `.vsix`.
+
+
 
 
 

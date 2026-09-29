@@ -1,9 +1,9 @@
 {
-  "name": "cmdcode",
-  "displayName": "Command Code",
-  "description": "Use Command Code as a Language Model Provider in VS Code's AI features, including Copilot Chat.",
-  "version": "0.1.3",
-  "publisher": "cmdcode",
+  "name": "command-code-provider",
+  "displayName": "Command Code Provider",
+  "description": "Use Command Code models in VS Code's AI features, including Copilot Chat.",
+  "version": "0.2.0",
+  "publisher": "devparanjay",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",
   "engines": {
@@ -24,7 +24,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/cmdcode/cmdcode-vsc.git"
+    "url": "https://github.com/devparanjay/cmdcode-vsc.git"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -41,17 +41,17 @@
     "commands": [
       {
         "command": "cmdcode.showLog",
-        "title": "Cmd Code: Show Log",
+        "title": "Command Code: Show Log",
         "category": "Cmd Code"
       },
       {
         "command": "cmdcode.copyDiagnostics",
-        "title": "Cmd Code: Copy Diagnostics",
+        "title": "Command Code: Copy Diagnostics",
         "category": "Cmd Code"
       },
       {
         "command": "cmdcode.restartProvider",
-        "title": "Cmd Code: Refresh Model List",
+        "title": "Command Code: Refresh Model List",
         "category": "Cmd Code"
       }
     ],

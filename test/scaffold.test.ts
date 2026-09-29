@@ -12,6 +12,8 @@ import * as stub from './vscode-stub.js';
 
 interface Manifest {
   readonly name: string;
+  readonly publisher: string;
+  readonly displayName: string;
   readonly main: string;
   readonly license: string;
   readonly engines: Readonly<Record<string, string>>;
@@ -59,8 +61,13 @@ describe('extension manifest', () => {
     expect(manifest.license).toBe('AGPL-3.0-or-later');
   });
 
-  it('names the vsix file cmdcode.cmd-code-vsc', () => {
-    expect(manifest.name).toBe('cmdcode');
+  it('publishes as devparanjay.command-code-provider', () => {
+    // The marketplace identity. It is deliberately NOT the vendor id: the
+    // provider registers under `cmdcode` (VENDOR_ID) while the extension ships
+    // as `command-code-provider`, and the two must never be conflated.
+    expect(manifest.publisher).toBe('devparanjay');
+    expect(manifest.name).toBe('command-code-provider');
+    expect(manifest.displayName).toBe('Command Code Provider');
   });
 
   it('contributes all six settings with the architecture 6.1 types and defaults', () => {
@@ -83,7 +90,7 @@ describe('extension manifest', () => {
     expect(ids).toHaveLength(COMMAND_IDS.length);
     for (const contribution of manifest.contributes.commands) {
       expect(contribution.command.startsWith('commandcode.')).toBe(false);
-      expect(contribution.title.startsWith('Cmd Code:')).toBe(true);
+      expect(contribution.title.startsWith('Command Code:')).toBe(true);
     }
   });
 
@@ -124,13 +131,28 @@ describe('extension manifest', () => {
     expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode');
   });
 
-  it('keeps the vendor id stable and distinct from the display name', async () => {
+  it('keeps the vendor id stable and distinct from the extension name', async () => {
     const { VENDOR_ID } = await import('../src/types.js');
-    // The id is hashed into every `cmdc-` model id, so changing it would orphan
-    // every existing chat. The display name is free to change and did.
+    // VENDOR_ID is hashed into every `cmdc-` model id and is what VS Code keys
+    // the provider by, so it is frozen. The marketplace name is free to change
+    // and did (cmdcode → command-code-provider, publisher cmdcode → devparanjay);
+    // conflating the two is exactly the mistake this test guards.
     expect(VENDOR_ID).toBe('cmdcode');
     expect(manifest.contributes.languageModelChatProviders[0].vendor).toBe(VENDOR_ID);
-    expect(manifest.name).toBe(VENDOR_ID);
+    expect(manifest.name).not.toBe(VENDOR_ID);
+    expect(manifest.contributes.languageModelChatProviders[0].displayName).toBe('Command Code');
+  });
+
+  it('keeps the cmdcode.* settings and command namespace', async () => {
+    // Renaming the marketplace identity must not renumber the user's settings
+    // or their keybindings. These are ours, and they are stable API surface.
+    const ids = manifest.contributes.commands.map((c) => c.command);
+    for (const id of ['cmdcode.showLog', 'cmdcode.copyDiagnostics', 'cmdcode.restartProvider']) {
+      expect(ids, `missing command ${id}`).toContain(id);
+    }
+    for (const key of Object.keys(manifest.contributes.configuration.properties)) {
+      expect(key.startsWith('cmdcode.'), `${key} left the cmdcode.* namespace`).toBe(true);
+    }
   });
 
   it('runs the two typechecks then vitest, in that order', () => {
@@ -182,7 +204,7 @@ describe('vscode test stub', () => {
     expect(stub.Uri.file('/tmp/ws').fsPath).toBe('/tmp/ws');
     expect(stub.Uri.joinPath(stub.Uri.file('/tmp'), 'AGENTS.md').path).toBe('/tmp/AGENTS.md');
 
-    expect(stub.window.createOutputChannel('Cmd Code').name).toBe('Cmd Code');
+    expect(stub.window.createOutputChannel('Command Code').name).toBe('Command Code');
     expect(stub.commands.registerCommand('cmdcode.showLog', () => {}).dispose).toBeTypeOf(
       'function',
     );

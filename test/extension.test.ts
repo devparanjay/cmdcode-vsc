@@ -252,7 +252,7 @@ describe('activate', () => {
     await activate(makeContext());
 
     expect(recorder.channels).toHaveLength(1);
-    expect(recorder.channels[0].name).toBe('Cmd Code');
+    expect(recorder.channels[0].name).toBe('Command Code');
     expect(recorder.subscriptions[0].dispose).toBeTypeOf('function');
   });
 
@@ -498,7 +498,7 @@ describe('cmdcode.copyDiagnostics', () => {
       stubProvider(),
       transport,
       silentLogger(),
-      vscode.window.createOutputChannel('Cmd Code'),
+      vscode.window.createOutputChannel('Command Code'),
       RESOLVED,
       CONFIG_DEFAULTS,
     );
@@ -529,7 +529,7 @@ describe('cmdcode.copyDiagnostics', () => {
     await runCommand('cmdcode.copyDiagnostics');
 
     expect(recorder.clipboard).toHaveLength(1);
-    expect(recorder.infos).toContain('Cmd Code diagnostics copied.');
+    expect(recorder.infos).toContain('Command Code diagnostics copied.');
   });
 
   it('reports the last CliError code, and no run, when the last run failed', async () => {
@@ -539,7 +539,7 @@ describe('cmdcode.copyDiagnostics', () => {
       stubProvider(),
       transportWithLastRun({ summary: null, errorCode: 'rate-limited' }),
       silentLogger(),
-      vscode.window.createOutputChannel('Cmd Code'),
+      vscode.window.createOutputChannel('Command Code'),
       RESOLVED,
       CONFIG_DEFAULTS,
     );
@@ -602,7 +602,7 @@ describe('cmdcode.restartProvider', () => {
       provider,
       transport,
       silentLogger(),
-      vscode.window.createOutputChannel('Cmd Code'),
+      vscode.window.createOutputChannel('Command Code'),
       RESOLVED,
       CONFIG_DEFAULTS,
     );

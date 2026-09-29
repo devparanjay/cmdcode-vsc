@@ -41,19 +41,19 @@ import {
  *
  * Steps 3's two failure modes return early and register nothing. That is the
  * point: a provider whose every request fails is worse than an absent one, so a
- * broken install degrades to "no Cmd Code models" rather than to an error on
+ * broken install degrades to "no Command Code models" rather than to an error on
  * every chat. `activate` therefore never throws.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // 1. The channel is created first and pushed immediately: steps 3-4 log
   // through it, and a channel nothing holds would leak on deactivation.
-  const channel = vscode.window.createOutputChannel('Cmd Code');
+  const channel = vscode.window.createOutputChannel('Command Code');
   context.subscriptions.push(channel);
 
   // 2. Read once. Everything downstream takes the captured `CmdCodeConfig`.
   const config = readConfig();
   const log = createLogger(channel, config.logLevel);
-  log.info(`Cmd Code: activating (logLevel=${config.logLevel}, models=${MODELS.length})`);
+  log.info(`Command Code: activating (logLevel=${config.logLevel}, models=${MODELS.length})`);
 
   // 3. Resolve the CLI. A null result is `cli-not-found`; the diagnostic
   // message lives in errors.ts, so the copy has exactly one home.
@@ -63,7 +63,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (error) {
     resolved = null;
     log.error(
-      `Cmd Code: resolveCli threw: ${error instanceof Error ? error.message : String(error)}`,
+      `Command Code: resolveCli threw: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
@@ -74,7 +74,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     return;
   }
-  log.info(`Cmd Code: CLI resolved to ${resolved.command} (${resolved.source})`);
+  log.info(`Command Code: CLI resolved to ${resolved.command} (${resolved.source})`);
 
   // 4. The capability probe. Same shape as step 3, different copy.
   let supported: boolean;
@@ -83,7 +83,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (error) {
     supported = false;
     log.error(
-      `Cmd Code: supportsJsonOutput threw: ${error instanceof Error ? error.message : String(error)}`,
+      `Command Code: supportsJsonOutput threw: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
@@ -116,7 +116,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // `context.subscriptions`, so deactivation unregisters them.
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(VENDOR_ID, provider));
   registerCommands(context, provider, transport, log, channel, resolved, config);
-  log.info('Cmd Code: activated');
+  log.info('Command Code: activated');
 }
 
 /**
@@ -168,7 +168,7 @@ function readConfig(): CmdCodeConfig {
  * register.
  */
 function reportUsabilityFailure(error: CliError, log: Logger): void {
-  log.error(`Cmd Code: [${error.code}] ${error.message}`);
+  log.error(`Command Code: [${error.code}] ${error.message}`);
   const presentation = toPresentation(error);
   void vscode.window.showErrorMessage(presentation.message);
 }

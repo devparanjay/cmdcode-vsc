@@ -7,6 +7,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0]
+
+This release changes the extension's marketplace identity. **The extension ID changes, so it must
+be reinstalled — existing installs of `cmdcode.cmdcode` are not upgraded automatically.**
+
+| | Before | After |
+| --- | --- | --- |
+| Extension ID | `cmdcode.cmdcode` | `devparanjay.command-code-provider` |
+| Display name | Command Code | Command Code Provider |
+| Publisher | `cmdcode` | `devparanjay` |
+
+### Added
+
+- A rewritten README for the Marketplace and GitHub: a what-it-does summary, requirements,
+  quick start, settings and command tables, feature and performance sections, a privacy and
+  security section, troubleshooting keyed on real log output, and links.
+- **Trademarks and affiliation** section. This is an independent community project, not affiliated
+  with, endorsed by, sponsored by or supported by Command Code. It covers the model names, the
+  third-party marks, the icon's provenance, and a commitment to act on trademark requests.
+- A **license and warranty** section stating AGPL-3.0-or-later and the absence of warranty.
+- A new extension icon built from the official Command Code symbol with a `PROVIDER` caption
+  strip, generated from the vendor's own `symbol.svg` by `scripts/make_icon.py`. The previous icon
+  was unrelated placeholder artwork, and an intermediate hand-transcription of the SVG paths
+  produced a broken mark; the script now rasterises the real artwork instead.
+- Tests pinning the three-way identity split — marketplace name, provider vendor id, and
+  display name — so they cannot be conflated again, and asserting the `cmdcode.*` settings and
+  command namespace survives the rename.
+
+### Changed
+
+- Command titles, the output channel, and the log prefix are now `Command Code` rather than
+  `Cmd Code`, matching the new display name. **Command ids are unchanged**
+  (`cmdcode.showLog`, `cmdcode.copyDiagnostics`, `cmdcode.restartProvider`), so keybindings and
+  `settings.json` keep working.
+- **Settings are unchanged and still namespaced `cmdcode.*`.** The namespace is independent of
+  the publisher, so renaming it would have silently reset every user's configuration.
+- The provider still registers under the vendor id `cmdcode` and still displays as **Command Code**
+  in the model picker. Only the extension's marketplace identity changed; the provider name the
+  user sees is deliberately unaffected.
+
 ## [0.1.3]
 
 ### Fixed
