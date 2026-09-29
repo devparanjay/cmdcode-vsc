@@ -278,7 +278,23 @@ export interface CliTransport {
    * Never rejects. Failures arrive via handlers.onError.
    */
   run(req: RunRequest, handlers: RunHandlers): Promise<void>;
-  /** Abort the in-flight run; resolves once the child has exited. */
+  /**
+   * Abort the in-flight run(s) on this transport.
+   *
+   * Sends SIGTERM to EVERY live run, not just the newest: a user pressing stop in
+   * a chat holding several in-flight turns means "stop" (§P4). Each signalled
+   * child keeps its own independent SIGKILL escalation after KILL_GRACE_MS, so a
+   * child that ignores SIGTERM is still reaped.
+   *
+   * Does NOT wait for any child to exit (§P5). Awaiting here would make cancel
+   * depend on the process it just signalled, which is a deadlock whenever that
+   * process is slow to honour SIGTERM — the one case the escalation exists for.
+   * The escalation, not this promise, is the backstop.
+   *
+   * With no live child, this resolves immediately and latches: the NEXT run()
+   * reports `interrupted` without spawning (§P6). A cancel issued while a run IS
+   * live does not latch.
+   */
   cancel(): Promise<void>;
   /** Resolves a display string for the resolved CLI path, or null if not found. */
   describe(): Promise<string | null>;
