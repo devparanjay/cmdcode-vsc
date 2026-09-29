@@ -46,6 +46,8 @@ export const MAX_OUTPUT_TOKENS = 32_000;
 export const MODELS: readonly CatalogModel[] = [
   {
     id: 'deepseek/deepseek-v4-pro',
+    vision: false,
+    reasoning: false,
     name: 'DeepSeek V4 Pro (latest)',
     contextWindow: 1000000,
     efforts: ['high', 'max'],
@@ -54,6 +56,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'deepseek/deepseek-v4-flash',
+    vision: false,
+    reasoning: false,
     name: 'DeepSeek V4 Flash (latest)',
     contextWindow: 1000000,
     efforts: ['high', 'max'],
@@ -62,6 +66,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'deepseek/deepseek-v4-flash-vision-exp',
+    vision: true,
+    reasoning: false,
     name: 'DeepSeek V4 Flash Vision (exp)',
     contextWindow: 1000000,
     efforts: ['high', 'max'],
@@ -70,6 +76,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'deepseek/deepseek-v4-flash-fast',
+    vision: false,
+    reasoning: false,
     name: 'DeepSeek V4 Flash Fast',
     contextWindow: 1000000,
     efforts: ['low', 'high', 'max'],
@@ -78,6 +86,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'deepseek/deepseek-v4.1-flash',
+    vision: true,
+    reasoning: false,
     name: 'DeepSeek V4.1 Flash',
     contextWindow: 1000000,
     efforts: ['low', 'high', 'max'],
@@ -86,6 +96,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'moonshotai/Kimi-K3',
+    vision: true,
+    reasoning: false,
     name: 'Kimi K3',
     contextWindow: 1000000,
     efforts: ['low', 'high', 'max'],
@@ -94,6 +106,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'moonshotai/Kimi-K2.7-Code',
+    vision: true,
+    reasoning: false,
     name: 'Kimi K2.7 Code',
     contextWindow: 256000,
     efforts: [],
@@ -102,6 +116,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'moonshotai/Kimi-K2.7-Code-Highspeed',
+    vision: true,
+    reasoning: false,
     name: 'Kimi K2.7 Code HighSpeed',
     contextWindow: 262000,
     efforts: [],
@@ -110,6 +126,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'moonshotai/Kimi-K2.6',
+    vision: true,
+    reasoning: false,
     name: 'Kimi K2.6',
     contextWindow: 256000,
     efforts: [],
@@ -118,6 +136,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'moonshotai/Kimi-K2.5',
+    vision: true,
+    reasoning: false,
     name: 'Kimi K2.5',
     contextWindow: 256000,
     efforts: [],
@@ -126,6 +146,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'z-ai/glm-5.3-flash',
+    vision: true,
+    reasoning: false,
     name: 'GLM-5.3 Flash',
     contextWindow: 1050000,
     efforts: ['low', 'high', 'max'],
@@ -134,6 +156,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'z-ai/glm-5.3-flashx',
+    vision: true,
+    reasoning: false,
     name: 'GLM-5.3 FlashX',
     contextWindow: 1000000,
     efforts: ['low', 'high', 'max'],
@@ -142,6 +166,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'zai-org/GLM-5.3',
+    vision: false,
+    reasoning: false,
     name: 'GLM-5.3',
     contextWindow: 1000000,
     efforts: ['low', 'high', 'max'],
@@ -150,6 +176,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'zai-org/GLM-5.2',
+    vision: false,
+    reasoning: false,
     name: 'GLM-5.2',
     contextWindow: 1000000,
     efforts: ['high', 'max'],
@@ -158,6 +186,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'zai-org/GLM-5.2-Fast',
+    vision: false,
+    reasoning: false,
     name: 'GLM-5.2 Fast',
     contextWindow: 1000000,
     efforts: [],
@@ -166,6 +196,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'zai-org/GLM-5.1',
+    vision: false,
+    reasoning: false,
     name: 'GLM-5.1',
     contextWindow: 0,
     efforts: [],
@@ -174,6 +206,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'zai-org/GLM-5',
+    vision: false,
+    reasoning: false,
     name: 'GLM-5',
     contextWindow: 200000,
     efforts: [],
@@ -182,6 +216,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'MiniMaxAI/MiniMax-M3',
+    vision: true,
+    reasoning: false,
     name: 'MiniMax M3',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -190,6 +226,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'MiniMaxAI/MiniMax-M2.7',
+    vision: false,
+    reasoning: false,
     name: 'MiniMax M2.7',
     contextWindow: 0,
     efforts: [],
@@ -198,6 +236,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'MiniMaxAI/MiniMax-M2.5',
+    vision: false,
+    reasoning: false,
     name: 'MiniMax M2.5',
     contextWindow: 200000,
     efforts: [],
@@ -206,6 +246,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xiaomi/mimo-v2.6-pro',
+    vision: true,
+    reasoning: false,
     name: 'MiMo V2.6 Pro',
     contextWindow: 1050000,
     efforts: [],
@@ -214,6 +256,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xiaomi/mimo-v2.6-pro-ultraspeed',
+    vision: true,
+    reasoning: false,
     name: 'MiMo V2.6 Pro UltraSpeed',
     contextWindow: 1050000,
     efforts: [],
@@ -222,6 +266,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xiaomi/mimo-v2.6-flash',
+    vision: true,
+    reasoning: false,
     name: 'MiMo V2.6 Flash',
     contextWindow: 1050000,
     efforts: [],
@@ -230,6 +276,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xiaomi/mimo-v2.5-pro',
+    vision: false,
+    reasoning: false,
     name: 'MiMo V2.5 Pro',
     contextWindow: 1000000,
     efforts: [],
@@ -238,6 +286,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xiaomi/mimo-v2.5',
+    vision: true,
+    reasoning: false,
     name: 'MiMo V2.5',
     contextWindow: 1000000,
     efforts: [],
@@ -246,6 +296,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.8-Omni-Flash',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.8 Omni Flash',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'xhigh'],
@@ -254,6 +306,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.8-Max-0902',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.8 Max 0902',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'xhigh'],
@@ -262,6 +316,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.8-Max',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.8 Max',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'xhigh'],
@@ -270,6 +326,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.8-27B',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.8 27B',
     contextWindow: 262000,
     efforts: ['low', 'medium', 'xhigh'],
@@ -278,6 +336,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.8-Flash',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.8 Flash',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'xhigh'],
@@ -286,6 +346,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.7-Max',
+    vision: false,
+    reasoning: false,
     name: 'Qwen 3.7 Max',
     contextWindow: 1000000,
     efforts: [],
@@ -294,6 +356,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.7-Plus',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.7 Plus',
     contextWindow: 1000000,
     efforts: [],
@@ -302,6 +366,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.7-Flash',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.7 Flash',
     contextWindow: 1000000,
     efforts: [],
@@ -310,6 +376,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.6-Max-Preview',
+    vision: false,
+    reasoning: false,
     name: 'Qwen 3.6 Max Preview',
     contextWindow: 0,
     efforts: [],
@@ -318,6 +386,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'Qwen/Qwen3.6-Plus',
+    vision: true,
+    reasoning: false,
     name: 'Qwen 3.6 Plus',
     contextWindow: 0,
     efforts: [],
@@ -326,6 +396,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'meituan/LongCat-2.0',
+    vision: false,
+    reasoning: false,
     name: 'LongCat 2.0',
     contextWindow: 1050000,
     efforts: [],
@@ -334,6 +406,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'stepfun/Step-5-Preview',
+    vision: true,
+    reasoning: false,
     name: 'Step 5 Preview',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -342,6 +416,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'stepfun/Step-3.7-Flash',
+    vision: true,
+    reasoning: false,
     name: 'Step 3.7 Flash',
     contextWindow: 256000,
     efforts: [],
@@ -350,6 +426,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'stepfun/Step-3.5-Flash',
+    vision: false,
+    reasoning: false,
     name: 'Step 3.5 Flash',
     contextWindow: 262000,
     efforts: [],
@@ -358,6 +436,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'tencent/hy3-paid',
+    vision: false,
+    reasoning: false,
     name: 'Tencent Hy3',
     contextWindow: 262000,
     efforts: [],
@@ -366,6 +446,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'tencent/hy4-preview',
+    vision: false,
+    reasoning: false,
     name: 'Tencent Hy4 Preview',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high'],
@@ -374,6 +456,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'nvidia/nemotron-3-ultra-550b-a55b',
+    vision: false,
+    reasoning: false,
     name: 'Nemotron 3 Ultra',
     contextWindow: 1000000,
     efforts: [],
@@ -382,6 +466,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'thinkingmachines/inkling',
+    vision: true,
+    reasoning: false,
     name: 'Inkling',
     contextWindow: 256000,
     efforts: [],
@@ -390,6 +476,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'thinkingmachines/inkling-small',
+    vision: true,
+    reasoning: false,
     name: 'Inkling Small',
     contextWindow: 1000000,
     efforts: [],
@@ -398,6 +486,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'poolside/laguna-s-2.1-free',
+    vision: false,
+    reasoning: false,
     name: 'Laguna S 2.1',
     contextWindow: 256000,
     efforts: [],
@@ -406,6 +496,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'inclusionai/ling-3.0-flash-sante:free',
+    vision: false,
+    reasoning: false,
     name: 'Ling 3.0 Flash Sante',
     contextWindow: 262000,
     efforts: [],
@@ -414,6 +506,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'stealth/space-bunny-alpha',
+    vision: true,
+    reasoning: false,
     name: 'Space Bunny Alpha',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -422,6 +516,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'stealth/pixel-canary',
+    vision: true,
+    reasoning: false,
     name: 'Pixel Canary',
     contextWindow: 262000,
     efforts: ['low', 'medium', 'xhigh'],
@@ -430,6 +526,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-sonnet-5',
+    vision: true,
+    reasoning: false,
     name: 'Claude Sonnet 5',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -438,6 +536,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-sonnet-4-6',
+    vision: true,
+    reasoning: false,
     name: 'Claude Sonnet 4.6',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -446,6 +546,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-fable-5-1',
+    vision: true,
+    reasoning: false,
     name: 'Claude Fable 5.1',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -454,6 +556,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-fable-5',
+    vision: true,
+    reasoning: false,
     name: 'Claude Fable 5',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -462,6 +566,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-opus-5-5',
+    vision: true,
+    reasoning: false,
     name: 'Claude Opus 5.5',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -470,6 +576,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-opus-5',
+    vision: true,
+    reasoning: false,
     name: 'Claude Opus 5',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -478,6 +586,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-opus-4-8',
+    vision: true,
+    reasoning: false,
     name: 'Claude Opus 4.8',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -486,6 +596,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-opus-4-7',
+    vision: true,
+    reasoning: false,
     name: 'Claude Opus 4.7',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -494,6 +606,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'claude-haiku-4-5-20251001',
+    vision: true,
+    reasoning: false,
     name: 'Claude Haiku 4.5',
     contextWindow: 200000,
     efforts: [],
@@ -502,6 +616,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-6-astra',
+    vision: true,
+    reasoning: false,
     name: 'GPT-6 Astra',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -510,6 +626,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-6-sol',
+    vision: true,
+    reasoning: false,
     name: 'GPT-6 Sol',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -518,6 +636,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-6-luna',
+    vision: true,
+    reasoning: false,
     name: 'GPT-6 Luna',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -526,6 +646,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.6-sol',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.6 Sol',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -534,6 +656,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.6-terra',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.6 Terra',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -542,6 +666,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.6-luna',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.6 Luna',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -550,6 +676,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.5',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.5',
     contextWindow: 400000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -558,6 +686,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.4',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.4',
     contextWindow: 400000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -566,6 +696,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.3-codex',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.3 Codex',
     contextWindow: 400000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -574,6 +706,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'gpt-5.4-mini',
+    vision: true,
+    reasoning: false,
     name: 'GPT-5.4 Mini',
     contextWindow: 400000,
     efforts: ['low', 'medium', 'high'],
@@ -582,6 +716,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'google/gemini-3.8-flash',
+    vision: true,
+    reasoning: false,
     name: 'Gemini 3.8 Flash',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -590,6 +726,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'google/gemini-3.7-flash',
+    vision: true,
+    reasoning: false,
     name: 'Gemini 3.7 Flash',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high'],
@@ -598,6 +736,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'google/gemini-3.6-flash',
+    vision: true,
+    reasoning: false,
     name: 'Gemini 3.6 Flash',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -606,6 +746,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'google/gemini-3.5-flash',
+    vision: true,
+    reasoning: false,
     name: 'Gemini 3.5 Flash',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -614,6 +756,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'google/gemini-3.5-flash-lite',
+    vision: true,
+    reasoning: false,
     name: 'Gemini 3.5 Flash Lite',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -622,6 +766,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'google/gemini-3.1-flash-lite',
+    vision: true,
+    reasoning: false,
     name: 'Gemini 3.1 Flash Lite',
     contextWindow: 1000000,
     efforts: ['low', 'medium', 'high'],
@@ -630,6 +776,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'sakana/fugu-ultra',
+    vision: true,
+    reasoning: false,
     name: 'Fugu Ultra',
     contextWindow: 1000000,
     efforts: ['high', 'xhigh'],
@@ -638,6 +786,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'meta/muse-spark-1.1',
+    vision: true,
+    reasoning: false,
     name: 'Muse Spark 1.1',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -646,6 +796,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'meta/muse-spark-1.2',
+    vision: true,
+    reasoning: false,
     name: 'Muse Spark 1.2',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -654,6 +806,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'meta/muse-spark-1.2-contributor',
+    vision: true,
+    reasoning: false,
     name: 'Muse Spark 1.2 Contributor',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -662,6 +816,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'meta/muse-spark-1.3',
+    vision: true,
+    reasoning: false,
     name: 'Muse Spark 1.3',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -670,6 +826,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'meta/muse-spark-1.3-contributor',
+    vision: true,
+    reasoning: false,
     name: 'Muse Spark 1.3 Contributor',
     contextWindow: 1050000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -678,6 +836,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xai/grok-4.5',
+    vision: true,
+    reasoning: false,
     name: 'Grok 4.5',
     contextWindow: 500000,
     efforts: ['low', 'medium', 'high'],
@@ -686,6 +846,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xai/grok-4.6',
+    vision: true,
+    reasoning: false,
     name: 'Grok 4.6',
     contextWindow: 500000,
     efforts: ['low', 'medium', 'high', 'xhigh'],
@@ -694,6 +856,8 @@ export const MODELS: readonly CatalogModel[] = [
   },
   {
     id: 'xai/grok-4.7',
+    vision: true,
+    reasoning: false,
     name: 'Grok 4.7',
     contextWindow: 500000,
     efforts: ['low', 'medium', 'high', 'xhigh'],

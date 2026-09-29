@@ -13,6 +13,7 @@ import { activate, deactivate } from '../src/extension.js';
 import { FakeTransport } from './fake-transport.js';
 import { TranscriptStore } from '../src/transcript.js';
 import {
+  API_VENDOR_ID,
   CONFIG_DEFAULTS,
   VENDOR_ID,
   type CliTransport,
@@ -39,7 +40,23 @@ const RESOLVED: ResolvedCli = {
   source: 'path',
 };
 
-const COMMAND_IDS = ['cmdcode.showLog', 'cmdcode.copyDiagnostics', 'cmdcode.restartProvider'];
+const COMMAND_IDS = [
+  'cmdcode.setApiKey',
+  'cmdcode.showLog',
+  'cmdcode.copyDiagnostics',
+  'cmdcode.restartProvider',
+];
+
+/**
+ * A `getConfiguration` stub answer, overriding only the keys given. Cast because
+ * the real `WorkspaceConfiguration` carries surface no test exercises.
+ */
+function makeConfiguration(over: Record<string, unknown> = {}): vscode.WorkspaceConfiguration {
+  return {
+    get: <T>(key: string, fallback?: T): T | unknown =>
+      key in over ? over[key] : (fallback ?? CONFIG_DEFAULTS[key as keyof typeof CONFIG_DEFAULTS]),
+  } as unknown as vscode.WorkspaceConfiguration;
+}
 
 // ─── Observation ─────────────────────────────────────────────────────────────
 // Everything below records what the code under test did. The stub is inert by
@@ -228,20 +245,45 @@ function setWorkspaceFolders(fsPath: string | null): void {
 // ─── Activation ──────────────────────────────────────────────────────────────
 
 describe('activate', () => {
-  it('registers one provider under VENDOR_ID and the three commands', async () => {
+  it('registers both providers and the four commands', async () => {
     await activate(makeContext());
 
-    expect(recorder.providers).toEqual([VENDOR_ID]);
+    // Two vendors, because they are different capabilities: the CLI works on
+    // every plan but cannot host Copilot's tool loop, the API can but needs a
+    // key and a GOAT-or-higher plan. Both are registered by default so the
+    // picker shows both groups; the API group reports a missing key on first
+    // use rather than disappearing.
+    expect(recorder.providers).toEqual([VENDOR_ID, API_VENDOR_ID]);
     expect([...recorder.commands.keys()].sort()).toEqual([...COMMAND_IDS].sort());
     expect(recorder.errors).toEqual([]);
+  });
+
+  it('registers only the CLI provider when the API one is disabled', async () => {
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      makeConfiguration({ enableApiProvider: false }),
+    );
+    await activate(makeContext());
+
+    // Turning one off must leave the other byte-identical: a user who wants
+    // API-only should not lose the models, and vice versa.
+    expect(recorder.providers).toEqual([VENDOR_ID]);
+  });
+
+  it('registers only the API provider when the CLI one is disabled', async () => {
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      makeConfiguration({ enableCliProvider: false }),
+    );
+    await activate(makeContext());
+
+    expect(recorder.providers).toEqual([API_VENDOR_ID]);
   });
 
   it('pushes every disposable it creates to context.subscriptions', async () => {
     const context = makeContext();
     await activate(context);
 
-    // 1 channel + 1 provider registration + 3 commands.
-    expect(context.subscriptions).toHaveLength(5);
+    // 1 channel + 2 provider registrations + 4 commands.
+    expect(context.subscriptions).toHaveLength(7);
     for (const subscription of context.subscriptions) {
       expect(subscription.dispose).toBeTypeOf('function');
     }
@@ -466,7 +508,9 @@ describe('readConfig', () => {
   it('survives a workspace with no folder open', async () => {
     setWorkspaceFolders(null);
     await expect(activate(makeContext())).resolves.toBeUndefined();
-    expect(recorder.providers).toEqual([VENDOR_ID]);
+    // Both vendors still register: neither needs a workspace root, and an
+    // absent folder must not silently drop a provider.
+    expect(recorder.providers).toEqual([VENDOR_ID, API_VENDOR_ID]);
   });
 });
 
@@ -630,6 +674,7 @@ describe('command namespace', () => {
   it('pushes each command registration to context.subscriptions', async () => {
     const context = makeContext();
     await activate(context);
-    expect(context.subscriptions).toHaveLength(5);
+    // 1 channel + 2 provider registrations + 4 commands.
+    expect(context.subscriptions).toHaveLength(7);
   });
 });

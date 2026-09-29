@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import * as vscode from 'vscode';
 
+import { imageMarker } from './images.js';
 import { CliError } from './types.js';
 
 /** Everything the provider learned while rendering one request. */
@@ -30,7 +31,7 @@ const MAX_PROJECT_INSTRUCTION_BYTES = 64 * 1024;
  */
 export async function buildPrompt(
   messages: readonly vscode.LanguageModelChatRequestMessage[],
-  opts: { model: string; cwd: string; maxChars: number },
+  opts: { model: string; cwd: string; maxChars: number; imagePaths?: readonly string[] },
 ): Promise<PromptBuild> {
   if (messages.length === 0) {
     throw new CliError('unknown', 'empty request');
@@ -48,6 +49,9 @@ export async function buildPrompt(
   for (let i = 0; i < lastIndex; i += 1) {
     const message = messages[i]!;
     const tag = message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user';
+    // History carries text only. The vendor documents that "only images from
+    // your most recent message are readable", so a path in an older turn would
+    // point at an image the model cannot open — worse than saying nothing.
     const text = extractText(message, () => {
       droppedNonTextParts += 1;
     });
@@ -58,6 +62,12 @@ export async function buildPrompt(
     droppedNonTextParts += 1;
   });
 
+  // Images attach to the live turn only, as the marker the CLI recognises.
+  const markers = (opts.imagePaths ?? [])
+    .map((path, index) => imageMarker(index + 1, path))
+    .join('\n');
+  const liveText = markers === '' ? nowText : `${nowText}\n\n${markers}`;
+
   const instructions = await readProjectInstructions(opts.cwd);
   const head = renderHead(
     opts.model,
@@ -65,7 +75,7 @@ export async function buildPrompt(
     instructions === null ? null : instructions.text,
   );
 
-  const tail = `</history>\n<user-now>\n${nowText}\n</user-now>\n</cmdcode-request>`;
+  const tail = `</history>\n<user-now>\n${liveText}\n</user-now>\n</cmdcode-request>`;
 
   let truncatedChars = 0;
   let text: string;
@@ -126,7 +136,13 @@ async function readProjectInstructions(
   return { text: raw.subarray(0, bytes).toString('utf8'), bytes };
 }
 
-/** The text parts of a message, joined by newlines. Non-text parts are dropped. */
+/**
+ * The text parts of a message, joined by newlines.
+ *
+ * Non-text parts are dropped and counted, EXCEPT image parts when `imagePaths`
+ * is supplied — see `buildPrompt`. A dropped image is a real loss, so it is
+ * reported rather than silently skipped, which is what `onNonTextPart` records.
+ */
 function extractText(
   message: vscode.LanguageModelChatRequestMessage,
   onNonTextPart: () => void,
@@ -137,7 +153,6 @@ function extractText(
       text.push(part.value);
       continue;
     }
-    // v1 has no image support (§D5). Dropped, and counted so the log can say so.
     onNonTextPart();
   }
   return text.join('\n');

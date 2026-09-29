@@ -183,6 +183,16 @@ export function buildArgs(req: RunRequest): string[] {
   args.push('-m', req.model);
   args.push('--max-turns', String(req.maxTurns));
   args.push('--no-auto-update');
+  if (req.readImages) {
+    // Headless mode has no way to ask the user for consent, so image vision
+    // resolves to false unless this is set:
+    //   const e = await getImageVisionEnabled();
+    //   if (void 0 !== e) return e;      // explicit setting wins
+    //   if (!S.askQuestion) return !1;   // headless → refuse
+    // It is passed only when the turn actually carries an image, so a text-only
+    // turn is not silently opting the user into reading images.
+    args.push('--config', 'imageVisionEnabled=true');
+  }
   return args;
 }
 

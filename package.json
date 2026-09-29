@@ -2,7 +2,7 @@
   "name": "command-code-provider",
   "displayName": "Command Code Provider",
   "description": "Use Command Code models in VS Code's AI features, including Copilot Chat.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "devparanjay",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -29,30 +29,42 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
-    "onLanguageModelChatProvider:cmdcode"
+    "onLanguageModelChatProvider:cmdcode",
+    "onLanguageModelChatProvider:cmdcode-api"
   ],
   "contributes": {
     "languageModelChatProviders": [
       {
         "vendor": "cmdcode",
-        "displayName": "Command Code"
+        "displayName": "Command Code CLI",
+        "managementCommand": "cmdcode.showLog"
+      },
+      {
+        "vendor": "cmdcode-api",
+        "displayName": "Command Code API",
+        "managementCommand": "cmdcode.setApiKey"
       }
     ],
     "commands": [
       {
+        "command": "cmdcode.setApiKey",
+        "title": "Command Code: Set API Key",
+        "category": "Command Code"
+      },
+      {
         "command": "cmdcode.showLog",
         "title": "Command Code: Show Log",
-        "category": "Cmd Code"
+        "category": "Command Code"
       },
       {
         "command": "cmdcode.copyDiagnostics",
         "title": "Command Code: Copy Diagnostics",
-        "category": "Cmd Code"
+        "category": "Command Code"
       },
       {
         "command": "cmdcode.restartProvider",
         "title": "Command Code: Refresh Model List",
-        "category": "Cmd Code"
+        "category": "Command Code"
       }
     ],
     "configuration": {
@@ -81,6 +93,26 @@
           "default": 900000,
           "minimum": 1000,
           "description": "Maximum characters in the rendered prompt. History is truncated to fit; the live request never is."
+        },
+        "cmdcode.imageSupport": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Read images you attach, on vision-capable models. On the CLI path this tells the Command Code CLI to read images without asking each time, because a headless run has no way to prompt. Turn it off to never send images."
+        },
+        "cmdcode.enableCliProvider": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer the **Command Code CLI** provider group. Works on every plan, reads images, but cannot run Copilot's tools. Turn it off to run API-only."
+        },
+        "cmdcode.enableApiProvider": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer the **Command Code API** provider group. Needs an API key and a GOAT-or-higher plan. This is the only path that can run Copilot's tools, including browser control."
+        },
+        "cmdcode.zeroDataRetention": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "API only. Enforce zero data retention (`x-cmd-zdr: 1`): no prompt training, and requests are refused rather than routed through a provider that cannot honour it. Narrows which tools may be sent, so some tools are dropped when this is on."
         },
         "cmdcode.logLevel": {
           "type": "string",

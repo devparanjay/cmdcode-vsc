@@ -2,7 +2,13 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 
 import { NdjsonReader } from '../src/cli/ndjson.js';
-import { toChatInformation } from '../src/catalog-to-chat.js';
+import { toChatInformation, type TransportCapabilities } from '../src/catalog-to-chat.js';
+
+/** CLI-transport capabilities: no host tool loop, images available. */
+const CAPS: TransportCapabilities = Object.freeze({
+  toolCalling: false,
+  imagesAvailable: true,
+});
 import { findModelByChatId, MODELS } from '../src/catalog.js';
 import { type ChildLike, type SpawnFn, type SpawnOptions } from '../src/cli/process.js';
 import { CliTransportImpl } from '../src/cli/process.js';
@@ -275,7 +281,7 @@ describe('the advertised id, the prompt id and the session key stay one string',
     // that neither branch's own suite covers, because branch 08's suite never
     // builds a prompt and branch 09's never publishes an advertised id.
     const store = new TranscriptStore();
-    for (const info of toChatInformation(MODELS, WS)) {
+    for (const info of toChatInformation(MODELS, WS, CAPS, 'cmdcode')) {
       const model = findModelByChatId(info.id, WS);
       expect(model, `advertised id ${info.id} did not invert`).toBeDefined();
 

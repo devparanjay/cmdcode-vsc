@@ -327,6 +327,7 @@ function request(cwd: string, resumeSessionId: string | null = null): RunRequest
     resumeSessionId,
     cwd,
     timeoutMs: 0,
+    readImages: false,
   };
 }
 

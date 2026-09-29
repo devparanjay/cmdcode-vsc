@@ -1,0 +1,111 @@
+name: Catalog update
+description: A model is missing, wrong, or has changed capability or pricing
+title: "[catalog] "
+labels: ["catalog"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The model catalog ships inside the extension, so a Command Code model
+        change only reaches the picker when a new release is cut.
+
+        **Please check it is not already fixed** before filing — look at the
+        latest release's changelog on the
+        [Marketplace page](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider).
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change?
+      options:
+        - A model is missing from the picker
+        - A model is listed but no longer works
+        - Context window is wrong
+        - Vision / capabilities are wrong
+        - Plan tier is wrong
+        - A model was renamed or removed upstream
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: model-id
+    attributes:
+      label: Model id
+      description: >
+        Exactly as Command Code reports it — run `cmd --list-models` and copy
+        the id verbatim, including any `vendor/` prefix. Do not shorten it.
+      placeholder: deepseek/deepseek-v4-pro
+    validations:
+      required: true
+
+  - type: textarea
+    id: extension-shows
+    attributes:
+      label: What the extension currently shows
+      description: >
+        The model picker entry, ideally copied. The picker shows the id, the
+        minimum plan tier, and a Tools/Vision chip in Manage Language Models
+        (**Tools** → filter by `@capability:`) .
+      placeholder: |
+        deepseek/deepseek-v4-pro · GO and above
+        Context: 1M
+        Vision chip: absent
+    validations:
+      required: true
+
+  - type: textarea
+    id: cli-reports
+    attributes:
+      label: What Command Code reports
+      description: >
+        Paste the relevant line from `cmd --list-models`, or the row from
+        <https://commandcode.ai/docs/reference/cli/models>. This is the
+        evidence the catalog is updated from, so please include it.
+      render: shell
+      placeholder: |
+        deepseek/deepseek-v4-pro | DeepSeek V4 Pro (latest) | 1M | high, max | $0.66/$1.98 | Go and above | …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: plan
+    attributes:
+      label: Your plan
+      description: >
+        The catalog gates models by plan tier, so a model above your tier will
+        not work for you and that is expected.
+      options:
+        - Go
+        - GOAT
+        - Pro
+        - Max
+        - Team
+        - Provider (pay-as-you-go)
+    validations:
+      required: true
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI version
+      description: Output of `cmd --version`.
+      placeholder: 1.69.0
+    validations:
+      required: true
+
+  - type: input
+    id: extension-version
+    attributes:
+      label: Extension version
+      placeholder: 0.3.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Links, screenshots, or what you expected to happen.
+    validations:
+      required: false

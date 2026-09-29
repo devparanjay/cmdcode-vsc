@@ -169,6 +169,7 @@ function request(over: Partial<RunRequest> = {}): RunRequest {
     resumeSessionId: null,
     cwd: WS,
     timeoutMs: 0,
+    readImages: false,
     ...over,
   };
 }

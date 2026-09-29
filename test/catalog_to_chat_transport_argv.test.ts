@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { toChatInformation } from '../src/catalog-to-chat.js';
+import { toChatInformation, type TransportCapabilities } from '../src/catalog-to-chat.js';
+
+/** CLI-transport capabilities: no host tool loop, images available. */
+const CAPS: TransportCapabilities = Object.freeze({
+  toolCalling: false,
+  imagesAvailable: true,
+});
 import {
   DEFAULT_CONTEXT_TOKENS,
   MAX_OUTPUT_TOKENS,
@@ -82,6 +88,7 @@ function request(model: string, cwd: string): RunRequest {
     resumeSessionId: null,
     cwd,
     timeoutMs: 0,
+    readImages: false,
   };
 }
 
@@ -131,7 +138,7 @@ const WS_B = '/private/tmp/other workspace';
 describe('advertised model -> inverted catalog id -> spawned argv', () => {
   it('passes the catalog id the advertised chat id inverts to, unchanged', async () => {
     const r = rig();
-    const chatId = toChatInformation([MODELS[0]!], WS_A)[0]!.id;
+    const chatId = toChatInformation([MODELS[0]!], WS_A, CAPS, 'cmdcode')[0]!.id;
     const resolved = findModelByChatId(chatId, WS_A);
 
     expect(resolved, `advertised id ${chatId} did not invert`).toBeDefined();
@@ -148,7 +155,7 @@ describe('advertised model -> inverted catalog id -> spawned argv', () => {
     // the CLI does not accept. The catalog's own mixed-case and unprefixed ids
     // are exactly the trap, so all of them are driven.
     const r = rig();
-    const advertised = toChatInformation(MODELS, WS_A);
+    const advertised = toChatInformation(MODELS, WS_A, CAPS, 'cmdcode');
     expect(advertised).toHaveLength(82);
 
     for (const info of advertised) {
@@ -168,15 +175,15 @@ describe('advertised model -> inverted catalog id -> spawned argv', () => {
   it('keeps a chat id minted in one workspace from selecting a model in another', () => {
     // Two windows on two folders. If the inversion ignored the workspace salt,
     // a selection made in window B would silently run against window A's id.
-    const fromA = toChatInformation([MODELS[0]!], WS_A)[0]!.id;
+    const fromA = toChatInformation([MODELS[0]!], WS_A, CAPS, 'cmdcode')[0]!.id;
 
     expect(findModelByChatId(fromA, WS_A)).toBeDefined();
     expect(findModelByChatId(fromA, WS_B), 'a chat id must not cross workspaces').toBeUndefined();
 
     // The two workspaces also publish disjoint id sets, so picker ids cannot
     // collide even for the same catalog entry.
-    const idsA = new Set(toChatInformation(MODELS, WS_A).map((i) => i.id));
-    for (const info of toChatInformation(MODELS, WS_B)) {
+    const idsA = new Set(toChatInformation(MODELS, WS_A, CAPS, 'cmdcode').map((i) => i.id));
+    for (const info of toChatInformation(MODELS, WS_B, CAPS, 'cmdcode')) {
       expect(idsA.has(info.id), `${info.id} leaked across workspaces`).toBe(false);
     }
   });
@@ -201,7 +208,7 @@ describe('the advertised id is the id the prompt names', () => {
     const store = new TranscriptStore();
     const r = rig();
 
-    for (const info of toChatInformation(MODELS, WS_A)) {
+    for (const info of toChatInformation(MODELS, WS_A, CAPS, 'cmdcode')) {
       const model = findModelByChatId(info.id, WS_A);
       expect(model, `advertised id ${info.id} did not invert`).toBeDefined();
 
@@ -229,7 +236,7 @@ describe('the advertised token budget survives the projection', () => {
     // The em-dash entries are the interesting ones: transcribed as 0 in the
     // catalog and published with DEFAULT_CONTEXT_TOKENS. A missing or too-small
     // fallback would offer a model whose window cannot hold its own output.
-    const info = toChatInformation(MODELS, WS_A);
+    const info = toChatInformation(MODELS, WS_A, CAPS, 'cmdcode');
     expect(info).toHaveLength(82);
 
     for (const [index, entry] of info.entries()) {
@@ -256,7 +263,7 @@ describe('the advertised token budget survives the projection', () => {
       const slice = modelsForPlan(tier);
       expect(slice.length, `plan ${tier} reached no models`).toBeGreaterThan(0);
 
-      for (const entry of toChatInformation(slice, WS_A)) {
+      for (const entry of toChatInformation(slice, WS_A, CAPS, 'cmdcode')) {
         expect(
           findModelByChatId(entry.id, WS_A),
           `plan ${tier} advertised an id that does not invert`,
@@ -265,15 +272,18 @@ describe('the advertised token budget survives the projection', () => {
     }
   });
 
-  it('advertises toolCalling (required by Agent mode) but not imageInput', () => {
-    // toolCalling is asserted against the projection, not the constant, because
-    // it is the flag Copilot's Agent-mode filter reads; getting it wrong makes
-    // every model unreachable in the picker. imageInput stays false: the
-    // prompt path renders text only. Rationale in catalog-to-chat.ts.
-    for (const entry of toChatInformation(MODELS, WS_A)) {
-      expect(entry.capabilities.toolCalling, `${entry.id} declares toolCalling`).toBe(true);
-      expect(entry.capabilities.imageInput, `${entry.id} advertises imageInput`).toBe(false);
+  it('advertises the CLI transport capabilities: no tools, per-model vision', () => {
+    // `toolCalling` is asserted against the projection, not a constant, because
+    // it is the flag Copilot's Agent-mode filter reads. False on the CLI path is
+    // deliberate and honest: the CLI runs tools in-process and never yields for
+    // a host, so true would light a chip that cannot fire. `imageInput` follows
+    // the vendor's per-model capability, so the set is mixed by design.
+    const entries = toChatInformation(MODELS, WS_A, CAPS, 'cmdcode');
+    for (const entry of entries) {
+      expect(entry.capabilities.toolCalling, `${entry.id} toolCalling`).toBe(false);
     }
+    expect(entries.some((e) => e.capabilities.imageInput)).toBe(true);
+    expect(entries.some((e) => !e.capabilities.imageInput)).toBe(true);
   });
 });
 

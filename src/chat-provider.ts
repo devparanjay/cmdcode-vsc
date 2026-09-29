@@ -3,10 +3,12 @@ import * as vscode from 'vscode';
 import { findModelByChatId } from './catalog.js';
 import { toChatInformation } from './catalog-to-chat.js';
 import { toPresentation } from './errors.js';
+import { isSupportedImage, stageImage } from './images.js';
 import { buildPrompt } from './prompt.js';
 import { TranscriptStore } from './transcript.js';
 import {
   CliError,
+  VENDOR_ID,
   type CatalogModel,
   type CliTransport,
   type CmdCodeConfig,
@@ -23,6 +25,38 @@ const EMPTY_RESPONSE_MESSAGE =
  * budgeting unusable — the estimate is documented as such in the README.
  */
 const CHARS_PER_TOKEN = 4;
+
+/**
+ * Stage every image in the live message to disk and return the paths.
+ *
+ * Fails soft: a part that is not a usable image, or a file that cannot be
+ * written, is skipped rather than failing the turn. A missing image is a
+ * degradation; a thrown error would be a broken chat.
+ */
+function stageImages(message: vscode.LanguageModelChatRequestMessage | undefined): string[] {
+  if (message === undefined) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const part of message.content) {
+    if (part instanceof vscode.LanguageModelTextPart) {
+      continue;
+    }
+    const record = part as { mimeType?: unknown; data?: unknown };
+    if (typeof record.mimeType !== 'string' || !(record.data instanceof Uint8Array)) {
+      continue;
+    }
+    if (!isSupportedImage(record.mimeType)) {
+      continue;
+    }
+    try {
+      paths.push(stageImage({ mimeType: record.mimeType, data: record.data }));
+    } catch {
+      // A staging failure is reported by the caller's part count, not thrown.
+    }
+  }
+  return paths;
+}
 
 /**
  * The single integration point between VS Code and the Command Code CLI.
@@ -58,7 +92,20 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken,
   ): vscode.ProviderResult<vscode.LanguageModelChatInformation[]> {
-    return toChatInformation(this.catalog, this.workspaceFsPath);
+    return toChatInformation(
+      this.catalog,
+      this.workspaceFsPath,
+      {
+        // The CLI runs its own tools in-process and never yields for a host, so
+        // it cannot participate in Copilot's tool loop. Claiming otherwise is
+        // what produced a Tools chip that never fired; the README says so.
+        toolCalling: false,
+        // Images work here, but only when the CLI is told to read them —
+        // headless mode has no way to ask the user.
+        imagesAvailable: this.config.imageSupport,
+      },
+      VENDOR_ID,
+    );
   }
 
   async provideLanguageModelChatResponse(
@@ -78,10 +125,21 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
     }
 
     const cwd = this.workspaceFsPath;
+
+    // The CLI reads images from a *path in the prompt*, so the bytes are staged
+    // to a content-addressed file and the prompt names it. Only the live turn
+    // carries them — the vendor documents that older messages' images are no
+    // longer readable, and a stale path would be worse than nothing.
+    const imagePaths = this.config.imageSupport ? stageImages(messages[messages.length - 1]) : [];
+    if (imagePaths.length > 0) {
+      this.log.info(`staged ${imagePaths.length} image(s) for the CLI to read`);
+    }
+
     const built = await buildPrompt(messages, {
       model: catalogModel.id,
       cwd,
       maxChars: this.config.maxPromptChars,
+      imagePaths,
     });
     if (built.truncatedChars > 0) {
       this.log.info(`prompt truncated: -${built.truncatedChars} chars`);
@@ -135,6 +193,7 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
           resumeSessionId,
           cwd,
           timeoutMs: this.config.timeoutMs,
+          readImages: imagePaths.length > 0,
         },
         {
           onTextDelta: (delta: string) => {

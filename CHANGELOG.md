@@ -7,6 +7,62 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0]
+
+A second provider, real tool support, and image support on both paths.
+
+### Added
+
+- **The Command Code Provider API as a second provider group** (`cmdcode-api`, displayed as
+  **Command Code API**). It talks to `https://api.commandcode.ai/provider/v1` over HTTPS, so
+  there is no process to spawn and the ~3–4 s CLI cold start is gone.
+- **Real tool calling on the API group, including browser control and MCP servers.** VS Code's own
+  tools arrive in `options.tools` and are sent with the request; a tool the model wants comes back
+  as a `LanguageModelToolCallPart` for **Copilot to execute** — this extension never runs a tool
+  itself. Results come back on the next turn as `function_call_output`.
+- **Image support on both providers**, on by default. The API sends a proper content block; the CLI
+  receives a content-addressed staged file that the prompt names, which is how a headless run reads
+  an image. The CLI is told to read images without asking (`--config imageVisionEnabled=true`) only
+  on a turn that actually contains one, because a headless run has no way to prompt.
+- `cmdcode.setApiKey` — **Command Code: Set API Key**. Stores the credential in VS Code's
+  `SecretStorage`, never in `settings.json`.
+- `cmdcode.imageSupport` (default `true`), `cmdcode.enableCliProvider` (default `true`),
+  `cmdcode.enableApiProvider` (default `true`) and `cmdcode.zeroDataRetention` (default `false`).
+- A `catalog-update` issue form, so a model that changes upstream is reported with the evidence
+  needed to fix it: the model id, what the extension shows, what the CLI reports, and both versions.
+- `scripts/sync-capabilities.mjs`, which regenerates the per-model capability flags from the CLI's
+  own catalog and reports any drift.
+
+### Changed
+
+- **The providers are now displayed as "Command Code CLI" and "Command Code API"** rather than the
+  single "Command Code" group, because they are different capabilities rather than two modes of one.
+  Either can be switched off independently.
+- **`imageInput` is now advertised per model**, transcribed from the vendor's own capability
+  catalog. 62 of the 82 models can read images. The previous blanket `false` was wrong; so would
+  have been a blanket `true` — 20 models genuinely cannot.
+- **`toolCalling` is now advertised per provider.** It is `true` on the API group, where the loop is
+  real, and `false` on the CLI group, where it is not.
+- The README documents the two providers, images, the capability table, the plan gate, and how to
+  report a catalog change.
+
+### Fixed
+
+- Nothing was dropped silently. Both documented tool constraints are now handled rather than
+  discovered: remote `mcp` tools are rewritten to `type: "function"` (the API rejects them because
+  the upstream would dial the user's server on Command Code's credential), and under zero data
+  retention the tool array is filtered to the documented safe set rather than sent and refused.
+
+### Known
+
+- **The CLI group is hidden in Copilot's Agent session.** VS Code's Agent mode lists only
+  tool-capable models, and the CLI path cannot honestly claim that flag — the CLI runs its tools
+  in-process and never yields to a host. The models remain available in Ask and Chat. This is the
+  same fact as the tool limitation, seen from the picker.
+- **A Go-plan user has no API access**, which is the vendor's design: Go is the only plan without
+  it. The `403 upgrade_required` is surfaced verbatim rather than hidden behind a silent fallback to
+  the CLI, because a billing problem should not look like a slower model.
+
 ## [0.2.0]
 
 This release changes the extension's marketplace identity. **The extension ID changes, so it must

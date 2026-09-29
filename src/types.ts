@@ -1,6 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Vendor id. A LanguageModelChatInformation.id must be unique per provider.
+//
+// Frozen. This string is hashed into every `cmdc-` model id (see `chatIdFor`),
+// so changing it would orphan every existing chat and invalidate every pinned
+// model. Only the DISPLAY name may change freely.
 export const VENDOR_ID = 'cmdcode';
+
+/**
+ * The second vendor, for the direct Provider API.
+ *
+ * A separate vendor rather than a mode on the first, because the two are
+ * different capabilities: the CLI runs its own tools in-process and cannot host
+ * Copilot's tool loop, while the API passes tool arrays through and lets the
+ * client execute them. A Go-plan user also has the CLI and not the API, and a
+ * single vendor with a mode would silently swap one out from under them.
+ */
+export const API_VENDOR_ID = 'cmdcode-api';
 
 /** Value reported as LanguageModelChatInformation.version — our adapter, not the model. */
 export const ADAPTER_VERSION = '1.0.0';
@@ -43,10 +58,30 @@ export type PlanTier = 'go' | 'goat' | 'pro' | 'max';
 export const PLAN_TIER_ORDER: readonly PlanTier[] = ['go', 'goat', 'pro', 'max'] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// A single catalog entry, transcribed from the CLI's reference/models.md.
+// A single catalog entry. Display data is transcribed from the CLI's
+// reference/models.md; capability flags come from the CLI's own static catalog.
 export interface CatalogModel {
   /** EXACT id accepted by `cmd -m`. Never transform, lowercase, or trim. */
   readonly id: string;
+  /**
+   * Whether the model accepts image input.
+   *
+   * NOT derived from `blurb`. The prose is not a data source — it disagrees
+   * with the product in both directions: `deepseek/deepseek-v4.1-flash` says
+   * "with vision" and is vision-capable, while `deepseek/deepseek-v4-pro` says
+   * nothing about vision and is text-only. This flag mirrors the CLI's own
+   * catalog, which is what the product branches on:
+   *
+   *   modelSupportsVision: m => !m?.inputModalities || m.inputModalities.includes("image")
+   *
+   * Regenerate with `node scripts/sync-capabilities.mjs --write`.
+   */
+  readonly vision: boolean;
+  /**
+   * Whether the model produces reasoning content. Captured for accuracy; it
+   * gates nothing in the VS Code API today.
+   */
+  readonly reasoning: boolean;
   /** Human display name, e.g. "Space Bunny Alpha". */
   readonly name: string;
   /** Context window in tokens. 0 when the catalog does not state one. */
@@ -78,6 +113,29 @@ export interface CmdCodeConfig {
   readonly maxPromptChars: number;
   /** `cmdcode.logLevel` → createLogger(). */
   readonly logLevel: LogLevel;
+  /**
+   * `cmdcode.imageSupport`. True by default: image support is a feature, not a
+   * risk, and a user who does not attach images is unaffected either way. When
+   * false, image parts are dropped and the CLI is not asked to read any.
+   */
+  readonly imageSupport: boolean;
+  /**
+   * `cmdcode.enableCliProvider`. The CLI path works on every plan, so it is on
+   * by default; a user can turn it off to run API-only.
+   */
+  readonly enableCliProvider: boolean;
+  /**
+   * `cmdcode.enableApiProvider`. The API path needs a key and a GOAT-or-higher
+   * plan, so it is opt-in — but registering the vendor is free without one, so
+   * this only controls whether the group is offered, not whether a key is set.
+   */
+  readonly enableApiProvider: boolean;
+  /**
+   * `cmdcode.zeroDataRetention`. Sends `x-cmd-zdr: 1`, which enforces no prompt
+   * training and ZDR-only routing — and narrows the accepted tool set, so a
+   * request carrying anything outside it fails. See src/api/tools.ts.
+   */
+  readonly zeroDataRetention: boolean;
 }
 
 export const CONFIG_DEFAULTS: Readonly<CmdCodeConfig> = Object.freeze({
@@ -86,6 +144,10 @@ export const CONFIG_DEFAULTS: Readonly<CmdCodeConfig> = Object.freeze({
   timeoutMs: 600_000,
   maxPromptChars: 900_000,
   logLevel: 'normal',
+  imageSupport: true,
+  enableCliProvider: true,
+  enableApiProvider: true,
+  zeroDataRetention: false,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -264,6 +326,12 @@ export interface RunRequest {
   readonly cwd: string;
   /** Hard wall-clock ceiling in ms. 0 disables. */
   readonly timeoutMs: number;
+  /**
+   * Whether this turn carries an image. When true the spawn adds
+   * `--config imageVisionEnabled=true`, because headless mode has no way to ask
+   * the user for consent and therefore refuses to read any image by default.
+   */
+  readonly readImages: boolean;
 }
 
 export interface CliTransport {

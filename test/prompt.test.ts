@@ -183,6 +183,60 @@ describe('buildPrompt', () => {
     expect(element(text, 'user-now')).toBe('live');
   });
 
+  // ── Images on the CLI path ───────────────────────────────────────────────
+  // The CLI reads an image from a PATH in the prompt, so the provider stages
+  // the bytes and hands the paths here. Two rules are load-bearing and are
+  // asserted below: the marker goes in the LIVE turn, and history never carries
+  // a path — the vendor documents that only the most recent message's images
+  // are readable, so a stale path would point at something the model cannot open.
+
+  it('renders an image marker in the live turn', async () => {
+    const { text } = await buildPrompt([user('what is this?')], {
+      model: MODEL,
+      cwd,
+      maxChars: BIG_MAX,
+      imagePaths: ['/tmp/staged-a.png'],
+    });
+    expect(element(text, 'user-now')).toBe('what is this?\n\n[Image #1: /tmp/staged-a.png]');
+  });
+
+  it('numbers multiple images in order', async () => {
+    const { text } = await buildPrompt([user('compare these')], {
+      model: MODEL,
+      cwd,
+      maxChars: BIG_MAX,
+      imagePaths: ['/tmp/a.png', '/tmp/b.png', '/tmp/c.png'],
+    });
+    const live = element(text, 'user-now');
+    expect(live).toContain('[Image #1: /tmp/a.png]');
+    expect(live).toContain('[Image #2: /tmp/b.png]');
+    expect(live).toContain('[Image #3: /tmp/c.png]');
+    expect(live.indexOf('Image #1')).toBeLessThan(live.indexOf('Image #2'));
+  });
+
+  it('renders no marker when no image was staged', async () => {
+    const { text } = await buildPrompt([user('plain')], {
+      model: MODEL,
+      cwd,
+      maxChars: BIG_MAX,
+      imagePaths: [],
+    });
+    expect(element(text, 'user-now')).toBe('plain');
+  });
+
+  it('leaves the prompt byte-identical when imagePaths is omitted entirely', async () => {
+    // Pre-0.3 callers pass no imagePaths; the output must not gain a stray
+    // newline or marker from the feature defaulting to on elsewhere.
+    const withArg = await buildPrompt([user('hi')], {
+      model: MODEL,
+      cwd,
+      maxChars: BIG_MAX,
+      imagePaths: [],
+    });
+    const withoutArg = await buildPrompt([user('hi')], { model: MODEL, cwd, maxChars: BIG_MAX });
+    expect(withArg.text).toBe(withoutArg.text);
+  });
+
   it('inlines AGENTS.md when it is present', async () => {
     await writeFile(join(cwd, 'AGENTS.md'), 'Always run the tests.\n');
 

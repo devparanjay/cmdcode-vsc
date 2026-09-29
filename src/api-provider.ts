@@ -1,0 +1,345 @@
+import * as vscode from 'vscode';
+
+import { findModelByChatId } from './catalog.js';
+import { toChatInformation, type TransportCapabilities } from './catalog-to-chat.js';
+import { ProviderApiClient, ProviderApiError, endpointFor, type ApiModel } from './api/client.js';
+import { readStream, StreamIncompleteError } from './api/stream.js';
+import { convertTools, type VsCodeTool } from './api/tools.js';
+import { buildImagePromptPart } from './images.js';
+import {
+  CliError,
+  type CatalogModel,
+  type CmdCodeConfig,
+  type Logger,
+} from './types.js';
+
+/**
+ * Verified averages: 18570/3, 18577/60, 18601/3 input/output. Exact tokenization
+ * would need a round trip per request, which is a poor trade for a number VS
+ * Code only uses for a prompt-fit check. The estimate is documented as such.
+ */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * A `LanguageModelDataPart`, matched structurally.
+ *
+ * VS Code hands these to providers but they are not in the stable typings yet,
+ * so `instanceof` is unavailable. Requiring both a string `mimeType` and a
+ * `Uint8Array` `data` is narrow enough not to swallow a text or tool part.
+ */
+function isDataPart(part: unknown): part is { mimeType: string; data: Uint8Array } {
+  if (part === null || typeof part !== 'object') {
+    return false;
+  }
+  const record = part as { mimeType?: unknown; data?: unknown };
+  return (
+    typeof record.mimeType === 'string' && record.data instanceof Uint8Array
+  );
+}
+
+/**
+ * The direct-API provider.
+ *
+ * This is the transport that can actually host VS Code's tool loop. The CLI runs
+ * its own tools in-process and never yields, so the CLI provider cannot; here the
+ * Provider API passes tool arrays through and the *client* executes them, which
+ * is exactly the contract Copilot drives.
+ *
+ * Stateless per turn, like the CLI provider: one request, streamed back.
+ */
+export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvider {
+  private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
+
+  readonly onDidChangeLanguageModelChatInformation?: vscode.Event<void> =
+    this.onDidChangeEmitter.event;
+
+  /** What this transport can deliver. The only path with real tool calling. */
+  static readonly CAPABILITIES: TransportCapabilities = Object.freeze({
+    toolCalling: true,
+    imagesAvailable: true,
+  });
+
+  constructor(
+    private readonly catalog: readonly CatalogModel[],
+    private readonly client: ProviderApiClient,
+    private readonly log: Logger,
+    private readonly workspaceFsPath: string,
+    private readonly config: CmdCodeConfig,
+    private readonly vendor: string,
+    /** Server-declared routes per model; empty when the list could not be fetched. */
+    private readonly apiModels: readonly ApiModel[] = [],
+  ) {}
+
+  provideLanguageModelChatInformation(
+    _options: vscode.PrepareLanguageModelChatModelOptions,
+    _token: vscode.CancellationToken,
+    // Synchronous and I/O-free: the shipped catalog is returned unconditionally.
+    // `apiModels` only refines endpoint routing at request time, so a network
+    // failure never empties the picker.
+  ): vscode.LanguageModelChatInformation[] {
+    return toChatInformation(
+      this.catalog,
+      this.workspaceFsPath,
+      CommandCodeApiChatProvider.CAPABILITIES,
+      this.vendor,
+    );
+  }
+
+  refreshModelInformation(): void {
+    this.onDidChangeEmitter.fire();
+  }
+
+  async provideLanguageModelChatResponse(
+    model: vscode.LanguageModelChatInformation,
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    options: vscode.ProvideLanguageModelChatResponseOptions,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    token: vscode.CancellationToken,
+  ): Promise<void> {
+    if (token.isCancellationRequested) {
+      return;
+    }
+    const catalogModel = findModelByChatId(model.id, this.workspaceFsPath);
+    if (catalogModel === undefined) {
+      throw new Error(`Unknown model: ${model.id}`);
+    }
+
+    const endpoint = endpointFor(
+      this.apiModels.find((m) => m.id === catalogModel?.id),
+    );
+
+    // Tools. `mcp` entries are rewritten to `function` and, under ZDR, anything
+    // outside the safe set is removed — the API fails the whole request
+    // otherwise, so this is a correctness step and not a nicety.
+    const { tools, dropped } = convertTools(
+      (options.tools ?? []) as readonly VsCodeTool[],
+      this.config.zeroDataRetention,
+    );
+    for (const d of dropped) {
+      this.log.info(`tool "${d.name}" (${d.type}) not sent: ${d.reason}`);
+    }
+    if (dropped.length > 0) {
+      void vscode.window.showWarningMessage(
+        `${dropped.length} tool(s) were not sent to Command Code: ${dropped.map((d) => d.name).join(', ')}.`,
+      );
+    }
+
+    const body = this.buildRequest(catalogModel, messages, tools, endpoint, token);
+    this.log.info(
+      `api: POST /provider/v1/${endpoint === 'messages' ? 'messages' : 'responses'} model=${catalogModel?.id} tools=${tools.length} zdr=${this.config.zeroDataRetention}`,
+    );
+
+    let response: Response;
+    try {
+      response = await this.client.post(
+        `/v1/${endpoint === 'messages' ? 'messages' : 'responses'}`,
+        body,
+        'text/event-stream',
+      );
+    } catch (error) {
+      throw this.toUserFacingError(error);
+    }
+
+    const subscription = token.onCancellationRequested(() => {
+      this.log.info('cancellation requested; aborting API request');
+      void response.body?.cancel().catch(() => undefined);
+    });
+
+    let sawText = false;
+    try {
+      await readStream(
+        response,
+        endpoint === 'messages' ? 'anthropic' : 'responses',
+        {
+          onText: (delta) => {
+            sawText = true;
+            progress.report(new vscode.LanguageModelTextPart(delta));
+          },
+          onToolCall: ({ callId, name, input }) => {
+            // Hand the call to Copilot. This provider never executes a tool —
+            // that inversion is the whole point of the API path.
+            progress.report(
+              new vscode.LanguageModelToolCallPart(
+                callId,
+                name,
+                (input ?? {}) as Record<string, unknown>,
+              ),
+            );
+          },
+          onUsage: (usage) => {
+            if (usage.input !== undefined || usage.output !== undefined) {
+              this.log.debug(
+                `api usage: in=${usage.input ?? '?'} out=${usage.output ?? '?'}`,
+              );
+            }
+          },
+        },
+      );
+    } catch (error) {
+      if (token.isCancellationRequested) {
+        return;
+      }
+      throw this.toUserFacingError(error);
+    } finally {
+      subscription.dispose();
+    }
+
+    if (!sawText) {
+      // A turn that produced no text and no tool call would render as a hang.
+      progress.report(
+        new vscode.LanguageModelTextPart(
+          'Command Code returned no content. See the Command Code log.',
+        ),
+      );
+    }
+  }
+
+  /** Assemble the request body in the dialect the chosen endpoint expects. */
+  private buildRequest(
+    model: CatalogModel,
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    tools: readonly { type: 'function'; name: string; description: string; parameters: object }[],
+    endpoint: 'messages' | 'responses',
+    token: vscode.CancellationToken,
+  ): Record<string, unknown> {
+    if (endpoint === 'messages') {
+      // Anthropic Messages: system is a top-level param, images are typed blocks.
+      return {
+        model: model.id,
+        max_tokens: model.contextWindow > 0 ? 32_000 : 32_000,
+        system: this.renderSystem(),
+        messages: messages.map((m) => ({
+          role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
+          content: this.renderContentBlocks(m, 'anthropic'),
+        })),
+        tools,
+        stream: true,
+      };
+    }
+    // OpenAI Responses.
+    return {
+      model: model.id,
+      instructions: this.renderSystem(),
+      input: messages.map((m) => ({
+        role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
+        content: this.renderContentBlocks(m, 'openai'),
+      })),
+      tools,
+      stream: true,
+    };
+  }
+
+  /** Project instructions as a system directive, preserving the CLI's cwd. */
+  private renderSystem(): string {
+    return `You are Command Code, running inside VS Code via the Command Code Provider extension. The workspace root is ${this.workspaceFsPath || '(none)'}.`;
+  }
+
+  /**
+   * Render one message's parts into the endpoint's content shape.
+   *
+   * Images become inline data URLs when the model supports them, because the API
+   * accepts image content blocks natively. When `imageSupport` is off, or the
+   * model is text-only, the part is dropped and counted — a text-only model
+   * would otherwise fail the whole request.
+   */
+  private renderContentBlocks(
+    message: vscode.LanguageModelChatRequestMessage,
+    dialect: 'anthropic' | 'openai',
+  ): unknown[] {
+    const parts: unknown[] = [];
+    for (const part of message.content) {
+      if (part instanceof vscode.LanguageModelTextPart) {
+        parts.push({ type: 'text', text: part.value });
+        continue;
+      }
+      // `LanguageModelDataPart` is delivered to providers by VS Code but is not
+      // yet in the stable typings, so it is matched structurally. A part that
+      // is neither text nor image-shaped is dropped rather than guessed at.
+      if (isDataPart(part)) {
+        if (this.config.imageSupport) {
+          const dataUrl = buildImagePromptPart(part);
+          if (dataUrl !== null) {
+            parts.push(
+              dialect === 'anthropic'
+                ? { type: 'image', source: { type: 'base64', media_type: part.mimeType, data: part.data } }
+                : { type: 'input_image', image_url: dataUrl },
+            );
+            continue;
+          }
+        }
+        this.log.debug(`dropped unsupported or oversized data part (${part.mimeType})`);
+        continue;
+      }
+      if (part instanceof vscode.LanguageModelToolResultPart) {
+        // The result of a call Copilot ran for us; hand it back verbatim.
+        parts.push({
+          type: 'function_call_output',
+          call_id: part.callId,
+          output: part.content
+            .map((c) => (c instanceof vscode.LanguageModelTextPart ? c.value : ''))
+            .join(''),
+        });
+        continue;
+      }
+      if (part instanceof vscode.LanguageModelToolCallPart) {
+        parts.push({
+          type: 'function_call',
+          call_id: part.callId,
+          name: part.name,
+          arguments: JSON.stringify(part.input),
+        });
+      }
+    }
+    return parts;
+  }
+
+  /**
+   * Local estimate. Exact tokenization would need a call per request, and the
+   * API has no cheap counting endpoint, so this is `chars ÷ 4` as documented in
+   * the README — approximate, never exact, and never blocking.
+   */
+  provideTokenCount(
+    _model: vscode.LanguageModelChatInformation,
+    text: string | vscode.LanguageModelChatRequestMessage,
+    _token: vscode.CancellationToken,
+  ): Thenable<number> {
+    if (typeof text === 'string') {
+      return Promise.resolve(Math.ceil(text.length / CHARS_PER_TOKEN));
+    }
+    let count = 0;
+    for (const part of text.content) {
+      if (part instanceof vscode.LanguageModelTextPart) {
+        count += part.value.length;
+      }
+    }
+    return Promise.resolve(Math.ceil(count / CHARS_PER_TOKEN));
+  }
+
+  /**
+   * Map a transport failure onto the CLI's error taxonomy so one presentation
+   * layer covers both providers. The plan gate is passed through verbatim: it is
+   * the only reliable way to learn the user's plan, and hiding it behind a
+   * generic failure would hide a billing problem.
+   */
+  private toUserFacingError(error: unknown): CliError {
+    if (error instanceof ProviderApiError) {
+      if (error.isPlanGate) {
+        return new CliError('auth', error.message);
+      }
+      if (error.status === 401) {
+        return new CliError('auth', 'The Command Code API key was rejected. Check cmdcode.apiKey.');
+      }
+      if (error.status === 429) {
+        return new CliError('rate-limited', 'The Command Code API is rate limiting this key.');
+      }
+      if (error.status === 400) {
+        return new CliError('no-response', error.message);
+      }
+      return new CliError('no-response', `Command Code API error (${error.status}): ${error.message}`);
+    }
+    if (error instanceof StreamIncompleteError) {
+      return new CliError('no-response', error.message);
+    }
+    return new CliError('no-response', error instanceof Error ? error.message : String(error));
+  }
+}

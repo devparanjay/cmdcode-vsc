@@ -32,16 +32,24 @@ const manifest: Manifest = JSON.parse(
   readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8'),
 );
 
-/** Architecture §6.1 — the six settings, their types and their defaults. */
+/** Every declared setting, its type, and its shipped default. */
 const CONFIG_DEFAULTS: Readonly<Record<string, { type: string; default: unknown }>> = {
   'cmdcode.cliPath': { type: 'string', default: '' },
   'cmdcode.maxTurns': { type: 'number', default: 24 },
   'cmdcode.timeoutSeconds': { type: 'number', default: 600 },
   'cmdcode.maxPromptChars': { type: 'number', default: 900_000 },
   'cmdcode.logLevel': { type: 'string', default: 'normal' },
+  // Vision is a feature and ships on; the API group is offered by default so a
+  // user with a key does not have to discover the switch before it works.
+  'cmdcode.imageSupport': { type: 'boolean', default: true },
+  'cmdcode.enableCliProvider': { type: 'boolean', default: true },
+  'cmdcode.enableApiProvider': { type: 'boolean', default: true },
+  // ZDR is opt-in: it narrows which tools may be sent, so it is never implied.
+  'cmdcode.zeroDataRetention': { type: 'boolean', default: false },
 };
 
 const COMMAND_IDS = [
+  'cmdcode.setApiKey',
   'cmdcode.showLog',
   'cmdcode.copyDiagnostics',
   'cmdcode.restartProvider',
@@ -50,12 +58,16 @@ const COMMAND_IDS = [
 const properties = manifest.contributes.configuration.properties;
 
 describe('extension manifest', () => {
-  it('declares the engine, entry point, activation event and license', () => {
+  it('declares the engine, entry point, activation events and license', () => {
     expect(manifest.engines.vscode).toBe('^1.104.0');
     expect(manifest.main).toBe('./dist/extension.js');
+    // One activation event per vendor: VS Code generates these from the
+    // languageModelChatProviders contribution, and listing them makes the
+    // dependency explicit in the manifest.
     expect(manifest.activationEvents).toEqual([
       'onStartupFinished',
       'onLanguageModelChatProvider:cmdcode',
+      'onLanguageModelChatProvider:cmdcode-api',
     ]);
     // SPDX id; `vsce` validates this field and fails packaging on an unknown value.
     expect(manifest.license).toBe('AGPL-3.0-or-later');
@@ -117,30 +129,35 @@ describe('extension manifest', () => {
     );
   });
 
-  it('declares exactly one vendor, with a display name', () => {
+  it('declares exactly two vendors, each with a display name', () => {
     const providers = manifest.contributes.languageModelChatProviders;
-    expect(providers).toHaveLength(1);
-    expect(providers[0].vendor).toBe('cmdcode');
-    // The name Copilot Chat renders next to the model list, and the one the
-    // picker groups by. The vendor id stays `cmdcode` — renaming the display
-    // name must not orphan a model id, which is derived from VENDOR_ID.
-    expect(providers[0].displayName).toBe('Command Code');
+    // Two vendors because they are different capabilities, not two modes of one:
+    // the CLI works on every plan but cannot host Copilot's tool loop, and the
+    // Provider API can but needs a key and GOAT-or-higher. A Go-plan user has
+    // one and not the other, and a single vendor would silently swap it.
+    expect(providers).toHaveLength(2);
+    const byVendor = new Map(providers.map((p) => [p.vendor, p.displayName]));
+    expect(byVendor.get('cmdcode')).toBe('Command Code CLI');
+    expect(byVendor.get('cmdcode-api')).toBe('Command Code API');
   });
 
-  it('activates on the vendor event its own contribution generates', () => {
+  it('activates on the vendor events its own contributions generate', () => {
     expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode');
+    expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode-api');
   });
 
-  it('keeps the vendor id stable and distinct from the extension name', async () => {
-    const { VENDOR_ID } = await import('../src/types.js');
+  it('keeps the vendor ids stable and distinct from the extension name', async () => {
+    const { VENDOR_ID, API_VENDOR_ID } = await import('../src/types.js');
     // VENDOR_ID is hashed into every `cmdc-` model id and is what VS Code keys
     // the provider by, so it is frozen. The marketplace name is free to change
     // and did (cmdcode → command-code-provider, publisher cmdcode → devparanjay);
     // conflating the two is exactly the mistake this test guards.
     expect(VENDOR_ID).toBe('cmdcode');
-    expect(manifest.contributes.languageModelChatProviders[0].vendor).toBe(VENDOR_ID);
+    expect(API_VENDOR_ID).toBe('cmdcode-api');
+    const declared = manifest.contributes.languageModelChatProviders.map((p) => p.vendor);
+    expect(declared).toContain(VENDOR_ID);
+    expect(declared).toContain(API_VENDOR_ID);
     expect(manifest.name).not.toBe(VENDOR_ID);
-    expect(manifest.contributes.languageModelChatProviders[0].displayName).toBe('Command Code');
   });
 
   it('keeps the cmdcode.* settings and command namespace', async () => {

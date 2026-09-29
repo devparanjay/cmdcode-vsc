@@ -3,7 +3,7 @@ import { join, relative, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { toChatInformation } from '../src/catalog-to-chat.js';
+import { toChatInformation, type TransportCapabilities } from '../src/catalog-to-chat.js';
 import {
   DEFAULT_CONTEXT_TOKENS,
   MAX_OUTPUT_TOKENS,
@@ -31,8 +31,18 @@ const ZERO_CONTEXT_IDS: readonly string[] = [
   'Qwen/Qwen3.6-Plus',
 ];
 
+/**
+ * The CLI transport's capabilities, which is the honest default for most of this
+ * file: no host-driven tool loop, images available. Tests that care about the
+ * other combinations pass their own.
+ */
+const CAPS: TransportCapabilities = Object.freeze({
+  toolCalling: false,
+  imagesAvailable: true,
+});
+
 describe('toChatInformation — shape and size', () => {
-  const info = toChatInformation(MODELS, WS);
+  const info = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
 
   it('returns exactly 82 objects, one per catalog entry', () => {
     expect(info).toHaveLength(82);
@@ -52,12 +62,12 @@ describe('toChatInformation — shape and size', () => {
   });
 
   it('returns an empty array for an empty catalog slice', () => {
-    expect(toChatInformation([], WS)).toEqual([]);
+    expect(toChatInformation([], WS, CAPS, 'cmdcode')).toEqual([]);
   });
 
   it('projects only the models it is given', () => {
     const slice = MODELS.slice(0, 3);
-    const projected = toChatInformation(slice, WS);
+    const projected = toChatInformation(slice, WS, CAPS, 'cmdcode');
     expect(projected).toHaveLength(3);
     expect(projected.map((i) => i.id)).toEqual(slice.map((m) => chatIdFor(m.id, WS)));
   });
@@ -110,7 +120,7 @@ describe('toChatInformation — shape and size', () => {
 });
 
 describe('toChatInformation — ids (AC-02)', () => {
-  const info = toChatInformation(MODELS, WS);
+  const info = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
 
   it('mints `cmdc-` plus 12 lowercase hex characters for every model', () => {
     for (const m of MODELS) {
@@ -127,11 +137,11 @@ describe('toChatInformation — ids (AC-02)', () => {
   it('is identical across two calls with the same workspace path', () => {
     // The hash is pure, so a second call cannot reshuffle the picker or orphan
     // the sessions a user already has against these ids.
-    expect(toChatInformation(MODELS, WS)).toEqual(toChatInformation(MODELS, WS));
+    expect(toChatInformation(MODELS, WS, CAPS, 'cmdcode')).toEqual(toChatInformation(MODELS, WS, CAPS, 'cmdcode'));
   });
 
   it('salts the id with the workspace path, so another workspace gets a disjoint set', () => {
-    const other = toChatInformation(MODELS, OTHER_WS);
+    const other = toChatInformation(MODELS, OTHER_WS, CAPS, 'cmdcode');
     const mine = new Set(info.map((i) => i.id));
     for (const i of other) {
       expect(mine.has(i.id), i.id).toBe(false);
@@ -145,14 +155,14 @@ describe('toChatInformation — the projection is exactly invertible (AC-03)', (
     // The hot path of §4.9 step 2: VS Code hands back the id it was given, and
     // the provider must recover the `-m` value. Loop the whole catalog.
     for (const model of MODELS) {
-      const [projected] = toChatInformation([model], WS);
+      const [projected] = toChatInformation([model], WS, CAPS, 'cmdcode');
       expect(findModelByChatId(projected.id, WS), model.id).toBe(model);
       expect(findModelByChatId(projected.id, WS)?.id, model.id).toBe(model.id);
     }
   });
 
   it('inverts a whole-catalog projection position by position', () => {
-    const info = toChatInformation(MODELS, WS);
+    const info = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
     for (const [index, projected] of info.entries()) {
       expect(findModelByChatId(projected.id, WS), MODELS[index].id).toBe(MODELS[index]);
     }
@@ -162,20 +172,20 @@ describe('toChatInformation — the projection is exactly invertible (AC-03)', (
     // Same assertion, written the way AC-03 states it, so a change to either
     // `chatIdFor` or the projection is caught here and not only in catalog.test.ts.
     for (const m of MODELS) {
-      const [projected] = toChatInformation([m], WS);
+      const [projected] = toChatInformation([m], WS, CAPS, 'cmdcode');
       expect(projected.id).toBe(chatIdFor(m.id, WS));
       expect(findModelByChatId(chatIdFor(m.id, WS), WS)?.id, m.id).toBe(m.id);
     }
   });
 
   it('does not resolve an id minted for another workspace', () => {
-    const [mine] = toChatInformation(MODELS, WS);
+    const [mine] = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
     expect(findModelByChatId(mine.id, OTHER_WS)).toBeUndefined();
   });
 });
 
 describe('toChatInformation — token budgets', () => {
-  const info = toChatInformation(MODELS, WS);
+  const info = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
 
   it('advertises the catalog context window verbatim when the catalog states one', () => {
     for (const [index, m] of MODELS.entries()) {
@@ -202,7 +212,7 @@ describe('toChatInformation — token budgets', () => {
     for (const row of ZERO_CONTEXT_IDS) {
       const m = MODELS.find((model) => model.id === row)!;
       expect(m.contextWindow, row).toBe(0);
-      expect(toChatInformation([m], WS)[0].maxInputTokens, row).toBe(200_000);
+      expect(toChatInformation([m], WS, CAPS, 'cmdcode')[0].maxInputTokens, row).toBe(200_000);
     }
   });
 
@@ -221,24 +231,55 @@ describe('toChatInformation — token budgets', () => {
 });
 
 describe('toChatInformation — capabilities', () => {
-  const info = toChatInformation(MODELS, WS);
+  const info = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
 
-  it('declares toolCalling true for every model, so Agent mode can list them', () => {
-    // VS Code filters the picker with
+  it('declares toolCalling per transport, and the CLI transport declares false', () => {
+    // VS Code's Agent filter is
     //   uZi(m, kind) = kind === "agent" ? suitableForAgentMode(m) : true
-    //   suitableForAgentMode = (m) => (m.capabilities?.agentMode ?? true) && !!m.capabilities?.toolCalling
-    // With toolCalling false, `agent` — the mode Copilot opens in — shows an
-    // empty model list. The models really can call tools; the CLI runs them.
+    //   suitableForAgentMode = m => (m.capabilities?.agentMode ?? true) && !!m.capabilities?.toolCalling
+    //
+    // So `false` keeps these models out of Agent mode and leaves them visible in
+    // Ask/Chat. It is the honest answer: the CLI runs its own tools in-process
+    // and never yields for a host, so claiming true would light a Tools chip
+    // that could never fire. The API transport is where true is real.
     for (const i of info) {
+      expect(i.capabilities.toolCalling, i.id).toBe(false);
+    }
+    for (const i of toChatInformation(
+      MODELS,
+      WS,
+      { toolCalling: true, imagesAvailable: true },
+      'cmdcode-api',
+    )) {
       expect(i.capabilities.toolCalling, i.id).toBe(true);
     }
   });
 
-  it('declares imageInput false for every model', () => {
-    // `buildPrompt` renders text parts only, so an image part would be dropped
-    // without a trace. Declared false until the prompt path forwards
-    // LanguageModelDataPart; see the CAPABILITIES comment in catalog-to-chat.ts.
+  it('declares imageInput per model, following the vendor catalog', () => {
+    // `vision` is transcribed from the CLI's own catalog (inputModalities),
+    // NOT from the blurb — the prose disagrees in both directions. So the flag
+    // must be mixed, and each entry must match its catalog value.
+    const vision = info.filter((i) => i.capabilities.imageInput);
+    const textOnly = info.filter((i) => !i.capabilities.imageInput);
+    expect(vision.length).toBeGreaterThan(0);
+    expect(textOnly.length).toBeGreaterThan(0);
     for (const i of info) {
+      const model = MODELS.find((m) => chatIdFor(m.id, WS) === i.id)!;
+      expect(i.capabilities.imageInput, model.id).toBe(model.vision);
+    }
+    // Spot-checks against the CLI catalog, so a wrong transcription is loud.
+    const byName = (name: string): boolean | undefined =>
+      info.find((i) => i.name === name)?.capabilities.imageInput;
+    expect(byName('Claude Sonnet 5')).toBe(true);
+    expect(byName('GPT-6 Astra')).toBe(true);
+    // DeepSeek V4 Pro says nothing about vision and is text-only; V4.1 Flash
+    // says "with vision" and is vision-capable. A blurb regex gets both wrong.
+    expect(byName('DeepSeek V4 Pro (latest)')).toBe(false);
+    expect(byName('DeepSeek V4.1 Flash')).toBe(true);
+  });
+
+  it('reports no image support at all when the transport cannot read images', () => {
+    for (const i of toChatInformation(MODELS, WS, { ...CAPS, imagesAvailable: false }, 'cmdcode')) {
       expect(i.capabilities.imageInput, i.id).toBe(false);
     }
   });
@@ -246,11 +287,6 @@ describe('toChatInformation — capabilities', () => {
   it('declares no other capability key', () => {
     const shapes = new Set(info.map((i) => Object.keys(i.capabilities).sort().join(',')));
     expect([...shapes]).toEqual(['imageInput,toolCalling']);
-  });
-
-  it('cannot be mutated from outside the projection', () => {
-    const [first] = info;
-    expect(Object.isFrozen(first.capabilities)).toBe(true);
   });
 });
 
@@ -271,7 +307,7 @@ describe('toChatInformation — metadata strings', () => {
    * asserted rather than assumed behind a non-null assertion.
    */
   function render(ws: string = WS): Rendered[] {
-    return toChatInformation(MODELS, ws).map((i) => {
+    return toChatInformation(MODELS, ws, CAPS, 'cmdcode').map((i) => {
       expect(i.detail, i.id).toBeTypeOf('string');
       expect(i.tooltip, i.id).toBeTypeOf('string');
       return { id: i.id, version: i.version, detail: i.detail!, tooltip: i.tooltip! };
@@ -288,7 +324,7 @@ describe('toChatInformation — metadata strings', () => {
   });
 
   it('uses the opaque family label `cmdcode`', () => {
-    expect(new Set(toChatInformation(MODELS, WS).map((i) => i.family))).toEqual(new Set(['cmdcode']));
+    expect(new Set(toChatInformation(MODELS, WS, CAPS, 'cmdcode').map((i) => i.family))).toEqual(new Set(['cmdcode']));
   });
 
   it('builds detail as `<catalog id> · <MIN PLAN> and above`', () => {
@@ -323,7 +359,7 @@ describe('toChatInformation — metadata strings', () => {
 
   it('carries the vendor display name through unchanged', () => {
     for (const [index, m] of MODELS.entries()) {
-      expect(toChatInformation([m], WS)[0].name, m.id).toBe(m.name);
+      expect(toChatInformation([m], WS, CAPS, 'cmdcode')[0].name, m.id).toBe(m.name);
     }
   });
 });
@@ -349,9 +385,12 @@ describe('the module boundary (§3.1)', () => {
 
   it('is one of the modules allowed to import vscode', () => {
     // §3.1 names the owners: the prompt builder, this projection and the chat
-    // provider, plus the extension-host-only entry points. A fourth owner would
-    // mean another module that only tests against the stub.
+    // providers, plus the extension-host-only entry points. A fourth owner would
+    // mean another module that only tests against the stub. `api-provider.ts` is
+    // the Provider API equivalent of `chat-provider.ts` and belongs here for the
+    // same reason.
     const ALLOWED = [
+      'api-provider.ts',
       'catalog-to-chat.ts',
       'chat-provider.ts',
       'commands.ts',

@@ -109,6 +109,7 @@ function request(over: Partial<RunRequest> = {}): RunRequest {
     maxTurns: 2,
     resumeSessionId: null,
     cwd: '/tmp/workspace',
+    readImages: false,
     timeoutMs: 0,
     ...over,
   };

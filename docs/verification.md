@@ -1278,3 +1278,61 @@ by reading the file list back out of the `.vsix`.
 
 
 
+
+### 11.15 0.3.0 — vision on both providers, and a real tool loop
+
+**The base URL was wrong, and that was the whole blocker.** Earlier probes found
+`api.commandcode.ai/v1/chat/completions` → 404 and concluded the API was agent-shaped
+under `/alpha/*`. Both were true and irrelevant: the documented routes live under
+**`/provider`**, and the host root serves the CLI's own private backend, which is a
+different surface. `https://api.commandcode.ai/provider/v1/chat/completions` is the
+route. Recorded because "the documented endpoint 404s" led to three wrong conclusions here.
+
+**Per-model capabilities come from the CLI's own catalog, not prose.** A first draft
+proposed regexing the "Best for" blurb; the vendor's code disproves it in both directions —
+`deepseek/deepseek-v4.1-flash` says "with vision" and is vision-capable, while
+`deepseek/deepseek-v4-pro` says nothing and is text-only. The CLI instead ships a static
+catalog of 90 entries with `inputModalities: ["text"|"text","image"]`, and branches on it
+via `modelSupportsVision`. `scripts/sync-capabilities.mjs` reads that and reports drift.
+Result: **62 vision, 20 text-only** across the 82 shipped models. The extractor initially
+missed `xai/grok-4.7` because it is the last entry and ends `}}` rather than `id:"` — caught
+by the cross-check, not by the count.
+
+**The two documented tool constraints are correctness, not polish.** Both fail a request
+outright, so both are handled before sending:
+- remote `mcp` tools → rewritten to `type: "function"` (the upstream would otherwise dial the
+  user's server on Command Code's credential);
+- under `x-cmd-zdr: 1` the array is filtered to `function`/`custom`/`local_shell`.
+
+A test caught a real bug here: the ZDR check originally ran on the *declared* type, so an
+`mcp` tool was dropped even though the rewrite makes it an ordinary `function` and therefore
+ZDR-safe. Fixed to test the post-rewrite type for `mcp` and the declared type otherwise.
+
+**Executed verification.** A throwaway probe called `vscode.lm.selectChatModels({})` against
+installed 0.3.0 in a real extension host (probe removed afterwards):
+
+```json
+{ "vendors": ["cmdcode", "cmdcode-api"],
+  "cmdcode":     { "total": 82, "vision": 62, "tools": 0 },
+  "cmdcode-api": { "total": 82, "vision": 62, "tools": 82 } }
+```
+
+Vision is mixed and correct in both groups — "DeepSeek V4.1 Flash" vision-capable, "DeepSeek
+V4 Pro" not. `toolCalling` is 0 on the CLI group and 82 on the API group, which is the
+per-provider split the plan called for. Both vendors register with 0 `UNKNOWN vendor`.
+
+`npm run check`: **487 passed / 0 failed** (471 + 16 new). Packaged 8 files, 56.71 KB — the
+first 0.3.0 build swept `.github/ISSUE_TEMPLATE/**` into the VSIX (10 files), now excluded.
+
+**Not verified, and stated plainly:**
+
+- **No live API request.** There is no API key in this environment, so every fact about
+  `/provider` comes from the published documentation. URLs, headers, bodies, SSE parsing and
+  error mapping are covered by unit tests and recorded fixtures; the end-to-end round trip is
+  unverified until a key is supplied.
+- **No live image read.** The account is rate-limited (`429`, resets 1 Oct). The wiring is
+  verified — staged file, prompt marker, `--config imageVisionEnabled=true`, and the data-URL
+  content block — but not the model's answer.
+- **https://commandcode.ai/models** could not be fetched (the 429 also gates web tools), so
+  the CAPS column there is unconfirmed. The CLI catalog is the source until the site is
+  reachable, and reconciling the two is exactly what the new issue template is for.
