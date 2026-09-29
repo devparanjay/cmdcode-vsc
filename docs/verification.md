@@ -1054,5 +1054,107 @@ would have to land with a working tool-result round trip.
 picker honouring `chatModelVisibility` / `chatModelPinned` for every vendor equally. Nothing in
 the extension controls it; the 82 models are pinnable today.
 
+### 11.11 0.1.2 — the models were filtered out of the picker before it rendered
+
+**Symptom.** The provider registered, all 82 models appeared in the Manage Language Models window,
+and pinning from that window worked — but Copilot Chat's model picker showed none of them, in the
+mode Copilot opens in.
+
+**Cause.** Two capabilities gates in the model filter, read from the shipped workbench (1.139.1):
+
+```js
+dZi(models, sessionType, modeKind, location):
+  modeKind === "agent"  → uZi(model)  → suitableForAgentMode(model)
+  location === "editor" → pZi(model)  → !!model.capabilities.toolCalling
+  otherwise             → no capability gate
+
+suitableForAgentMode = p => (typeof p.capabilities?.agentMode > "u" || p.capabilities.agentMode)
+                           && !!p.capabilities?.toolCalling
+```
+
+The live session state was `currentModeKind = agent`, `currentSessionType = local`
+(`renderer.log`), so the first gate applied. With `toolCalling: false` — the value
+`src/catalog-to-chat.ts` shipped in every release up to 0.1.1 — all 82 models were dropped before
+the picker rendered. The gate is `agent`-only: in an **Ask** or **Chat** session the same models
+would have been listed.
+
+**Fix.** `toolCalling: true`. `imageInput` unchanged at `false`.
+
+**Why `true` is accurate, and what it does not claim.** The Command Code CLI executes tools
+in-process and never yields for a host to run one. From `cli.mjs`:
+
+```js
+emit({type:"tool_running", toolCallId:n.id, toolName:n.name, description:r});
+const g = await execGuarded({toolUse:…});      // runs here
+emit(…{type:"tool_completed" | "tool_errored", toolCallId:n.id, toolName:n.name, …});
+```
+
+There is no `tool_call`, `tool_request` or `permission_request` emitter anywhere in the bundle, so
+the CLI cannot be driven by a host through the current print mode. The extension therefore still
+emits no `LanguageModelToolCallPart` and still ignores `options.tools`: Copilot sends no tool
+schemas, and a model's own tool work does not surface in the chat's tool UI. The flag states that
+the model can call tools, which is true; it does not claim Copilot orchestrates them. Both the
+README and the `CAPABILITIES` comment say so explicitly, replacing the old "no tool calling" claim.
+
+`imageInput` stays `false` deliberately: `buildPrompt` renders text parts only, so an image part
+would be discarded without a trace. Several catalog models are vision-capable; that is a gap in
+the adapter's prompt path, not in the models.
+
+**Executed verification** — a throwaway probe extension called `vscode.lm.selectChatModels({})`
+against the installed 0.1.2 in a real extension host (probe removed afterwards):
+
+```json
+{ "cmdcodeCount": 82,
+  "capabilities": { "supportsImageToText": false, "supportsToolCalling": true },
+  "distinctCapabilityShapes": 1 }
+```
+
+All 82 models report `supportsToolCalling: true`, against 0 in 0.1.1. Trace log confirms
+`[LM] registering language model provider cmdcode {}` from `cmdcode.cmdcode-0.1.2`, with no
+`UNKNOWN vendor`. `npm run check`: **435 passed / 0 failed**. Packaged 8 files, 34.69 KB.
+
+**Still unverified** — that a *live* Agent turn completes and streams back into the chat pane. The
+account on this machine hit its weekly limit during this work
+(`429 … Your limit resets at 2026-10-01T15:18:35Z`), so no request could be completed here. The
+picker-visibility defect is fixed and proven; end-to-end chat execution is not, for want of a usable
+quota.
+
+**Two stale claims in the earlier record**, corrected here rather than left to mislead:
+
+- §5 M1 and §10 AC-13 reported activation and registration passing. Both were true of the code and
+  false of the product for the reasons in §11.2 and §11.11 respectively.
+- §6 recorded "No tool calling — **confirmed**" and asserted every model reports
+  `{imageInput: false, toolCalling: false}`. That was correct for what shipped and is now wrong
+  for what should; the README and the tests carry the current contract.
+
+**Environment note.** The CLI on this machine is now `command-code@1.69.0`; this document records
+`1.66.0` in §1. v1.69 added `--tools-all` and `--tools-enable`, which the transport's argv
+deliberately excludes. That exclusion is a separate decision, unaffected by this fix, and is worth
+revisiting now that the flag is honest about tool support.
+
+### 11.12 The direct-API transport, researched but not adopted
+
+Scoped out of 0.1.2 at the user's direction ("make the current extension work properly first").
+Recorded because the research is done and the finding is not obvious:
+
+`https://api.commandcode.ai` is live and self-describes:
+
+```
+GET https://api.commandcode.ai/                     → 200 {"success":true,"message":"Command Code API"}
+GET https://api.commandcode.ai/alpha/generate       → 401 UNAUTHORIZED (+ docs pointer)
+GET …/v1/chat/completions  |  /v1/messages  |  /v1/responses  |  /v1/models  → 404
+```
+
+So an authenticated API surface exists under `/alpha/*`, but the OpenAI- and Anthropic-compatible
+paths this extension would want are not mounted there. Vendored endpoints in `cli.mjs` are
+`/alpha/generate`, `/alpha/agent/generate`, `/alpha/sandbox/*`, `/alpha/billing/*` and others — an
+agent-oriented surface, not a general chat-completions one. No route list is published in
+`/docs`, and `commandcode.ai/docs` documents the CLI, not an API.
+
+Next step when this is picked up: authenticate and enumerate the real `/alpha/*` routes rather than
+assuming a compatibility shim, and confirm whether a tool-result channel exists at all — without
+one, a direct transport hits the same `suitableForAgentMode` ceiling.
+
+
 
 

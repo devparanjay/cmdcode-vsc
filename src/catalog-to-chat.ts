@@ -19,11 +19,31 @@ import { ADAPTER_VERSION, type CatalogModel } from './types.js';
 const FAMILY = 'cmdcode';
 
 /**
- * v1 renders text only and never calls tools from the model side (architecture
- * §D5), so both capabilities are declined — advertising them optimistically
- * would make Copilot send parts this adapter drops.
+ * Advertised capabilities.
+ *
+ * `toolCalling: true` is required for a model to appear in Copilot's **Agent**
+ * session at all. VS Code filters the model list with
+ * `uZi(model, currentModeKind)`, which for `currentModeKind === "agent"`
+ * demands `capabilities.toolCalling`; with it false every model in this
+ * catalog is dropped before the picker renders. That gate was verified in the
+ * shipped workbench (1.139.1), not inferred:
+ *
+ *   uZi: (s, kind) => kind === "agent" ? suitableForAgentMode(s.metadata) : true
+ *   suitableForAgentMode: p => (p.capabilities?.agentMode ?? true) && !!p.capabilities?.toolCalling
+ *
+ * The flag is a true statement about the model: Command Code models *can* call
+ * tools, and the CLI runs them. What this adapter does not do is let Copilot
+ * drive them — it never emits `LanguageModelToolCallPart` and never reads
+ * `options.tools`, because the CLI executes tools in-process rather than
+ * yielding for a host. So Copilot sends no tool schemas, the CLI uses its own,
+ * and the chat's tool UI stays quiet. Declining the flag instead would have
+ * meant the models are unreachable in Agent mode.
+ *
+ * `imageInput: false` stays. `buildPrompt` renders text parts only, so an
+ * image part would be silently discarded; advertising vision would be a lie
+ * until the prompt path forwards `LanguageModelDataPart`.
  */
-const CAPABILITIES = Object.freeze({ imageInput: false, toolCalling: false });
+const CAPABILITIES = Object.freeze({ imageInput: false, toolCalling: true });
 
 /**
  * Render catalog entries as VS Code `LanguageModelChatInformation` objects.

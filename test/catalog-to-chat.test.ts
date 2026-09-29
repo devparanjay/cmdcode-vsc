@@ -220,14 +220,25 @@ describe('toChatInformation — token budgets', () => {
   });
 });
 
-describe('toChatInformation — capabilities (declined for v1)', () => {
+describe('toChatInformation — capabilities', () => {
   const info = toChatInformation(MODELS, WS);
 
-  it('declares toolCalling false and imageInput false for every model', () => {
-    // §D5: v1 renders text only. Advertising either would make Copilot send
-    // parts this adapter silently drops.
+  it('declares toolCalling true for every model, so Agent mode can list them', () => {
+    // VS Code filters the picker with
+    //   uZi(m, kind) = kind === "agent" ? suitableForAgentMode(m) : true
+    //   suitableForAgentMode = (m) => (m.capabilities?.agentMode ?? true) && !!m.capabilities?.toolCalling
+    // With toolCalling false, `agent` — the mode Copilot opens in — shows an
+    // empty model list. The models really can call tools; the CLI runs them.
     for (const i of info) {
-      expect(i.capabilities.toolCalling, i.id).toBe(false);
+      expect(i.capabilities.toolCalling, i.id).toBe(true);
+    }
+  });
+
+  it('declares imageInput false for every model', () => {
+    // `buildPrompt` renders text parts only, so an image part would be dropped
+    // without a trace. Declared false until the prompt path forwards
+    // LanguageModelDataPart; see the CAPABILITIES comment in catalog-to-chat.ts.
+    for (const i of info) {
       expect(i.capabilities.imageInput, i.id).toBe(false);
     }
   });

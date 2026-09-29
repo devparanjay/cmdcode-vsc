@@ -14,8 +14,10 @@ chat as text.
 This extension is a **Language Model Provider only**. It is deliberately small:
 
 - No chat UI of its own — VS Code's own clients (Copilot Chat) are the UI.
-- **No tool calling.** Every model advertises `toolCalling: false`, and requests that offer
-  tools have them ignored. See [Limitations](#limitations).
+- **Copilot does not drive the tools.** Every model advertises `toolCalling: true` (VS Code's Agent
+  session hides models that do not), but the Command Code CLI runs its own tools in-process rather
+  than handing them to a host. So Copilot sends no tool schemas, and tool calls do not appear in
+  the chat's tool UI. See [Limitations](#limitations).
 - No IDE-context forwarding. That is the separate vendor extension's job — see
   [Relationship to the official extension](#relationship-to-the-official-extension).
 
@@ -56,10 +58,18 @@ These are known and intentional for v1, not bugs:
   `characters ÷ 4` figure. It does **not** run a real tokenizer, because obtaining one costs a
   multi-second CLI round trip that would make budgeting unusable. Treat the number as approximate
   (well within ±20%), never exact.
-- **No tool calling.** A Cmd Code model cannot call VS Code tools in this version. The CLI does
-  have its own tool system, but print mode offers no documented way to feed a tool result back
-  into a run, so advertising the capability would mean dropping tool calls silently. The extension
-  declines up front instead.
+- **Copilot does not orchestrate tool calls.** The models advertise `toolCalling: true`, because
+  VS Code's **Agent** session filters the model list to tool-capable models only — with the flag
+  false the picker is empty and the models are unreachable there. What the flag does *not* do is
+  let Copilot drive them. The Command Code CLI executes tools in-process: it emits `tool_running`,
+  runs the tool, then emits `tool_completed`, all inside one `cmd -p` invocation, and never yields
+  for a host to run one. So the extension never emits a `LanguageModelToolCallPart`, never reads
+  `options.tools`, and a model's own tool work happens silently rather than showing up in the
+  chat's tool UI. Nothing is silently dropped — Copilot simply never asks.
+- **No vision.** `imageInput` is `false`: the extension renders text parts into the prompt only,
+  so an attached image would be discarded without a trace. It stays `false` until the prompt path
+  forwards image data. Several catalog models *are* vision-capable; the limitation is the
+  adapter's, not the model's.
 - **Full history is resent each turn.** The extension renders the whole conversation into the
   prompt every turn, so long chats cost more tokens than a persistent session would. The CLI's
   own session cache makes much of that reuse cheap, but the cost is real.

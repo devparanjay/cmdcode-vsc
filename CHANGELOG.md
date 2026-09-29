@@ -7,6 +7,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2]
+
+### Fixed
+
+- The models now appear in Copilot Chat's model picker. They advertised
+  `toolCalling: false`, and VS Code filters the model list for the **Agent**
+  session through
+  `(m) => (m.capabilities?.agentMode ?? true) && !!m.capabilities?.toolCalling`.
+  With the flag false, every one of the 82 models was dropped before the picker
+  rendered — so the provider registered fine, the models were listed in the
+  Language Models window, and the picker was empty in the mode Copilot opens in.
+
+  `toolCalling` is now `true`. This is a true statement about the models: the
+  Command Code CLI executes tools in-process (`tool_running` → `execGuarded` →
+  `tool_completed`) and never yields for a host to run one. The extension still
+  emits no `LanguageModelToolCallPart` and still ignores `options.tools`, so
+  Copilot sends no tool schemas and tool calls do not appear in the chat's tool
+  UI. Nothing is dropped — Copilot simply never asks.
+
+  `imageInput` stays `false` and is unchanged: the prompt path renders text
+  parts only, so an image part would be discarded. Advertising vision would be a
+  lie until `buildPrompt` forwards `LanguageModelDataPart`.
+
+### Changed
+
+- README and the `catalog-to-chat.ts` capability comment now describe what the
+  flag does and does not imply, instead of claiming "no tool calling".
+- Tests assert `toolCalling: true` against the projection, with the Agent-mode
+  filter quoted, so the flag cannot silently regress back to false.
+
 ## [0.1.1]
 
 ### Fixed

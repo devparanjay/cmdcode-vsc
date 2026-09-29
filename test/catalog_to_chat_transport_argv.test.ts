@@ -265,12 +265,13 @@ describe('the advertised token budget survives the projection', () => {
     }
   });
 
-  it('declines both capabilities, so no advertised model invites an image or a tool call', () => {
-    // v1 renders text only. Advertising a capability Copilot would then exercise
-    // is the failure this freeze exists to prevent, so it is asserted against
-    // the projection itself rather than against the constant.
+  it('advertises toolCalling (required by Agent mode) but not imageInput', () => {
+    // toolCalling is asserted against the projection, not the constant, because
+    // it is the flag Copilot's Agent-mode filter reads; getting it wrong makes
+    // every model unreachable in the picker. imageInput stays false: the
+    // prompt path renders text only. Rationale in catalog-to-chat.ts.
     for (const entry of toChatInformation(MODELS, WS_A)) {
-      expect(entry.capabilities.toolCalling, `${entry.id} advertises toolCalling`).toBe(false);
+      expect(entry.capabilities.toolCalling, `${entry.id} declares toolCalling`).toBe(true);
       expect(entry.capabilities.imageInput, `${entry.id} advertises imageInput`).toBe(false);
     }
   });
