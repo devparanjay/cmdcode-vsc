@@ -16,10 +16,20 @@ Green from a clean tree (no `dist/`, no `node_modules/` staged, no uncommitted s
 ```
 tsc -p tsconfig.json --noEmit        → clean
 tsc -p tsconfig.test.json --noEmit   → clean
-vitest run                           → 14 files, 351 tests, 351 passed
+vitest run                           → 20 files, 422 tests, 422 passed
 ```
 
-Final run after the two defects below were fixed: **351 passed / 0 failed**.
+Final run after the two defects below were fixed: **422 passed / 0 failed**.
+
+The figures above are quoted verbatim from the runner, not from a plan document
+(§9.3):
+
+```
+ Test Files  20 passed (20)
+      Tests  422 passed (422)
+   Start at  20:04:38
+   Duration  9.52s (tests 91%, transform 6%, import 3%)
+```
 
 | Test file | Tests | Covers |
 |---|---|---|
@@ -34,9 +44,15 @@ Final run after the two defects below were fixed: **351 passed / 0 failed**.
 | `test/resolve.test.ts` | 41 | CLI resolution, JSON-support probe |
 | `test/scaffold.test.ts` | 10 | manifest contributes, engine range, license |
 | `test/transcript.test.ts` | 11 | session store |
-| `test/transport-pipeline.test.ts` | 27 | AC-08, spawn log line |
+| `test/transport-concurrency.test.ts` | 6 | PR #1 AC-04…AC-07, AC-10, AC-12 (§9) |
+| `test/transport-pipeline.test.ts` | 27 | AC-08, spawn log line, the unmodified §9 guards |
 | `test/types.test.ts` | 15 | `ExitCode`, `CONFIG_DEFAULTS`, `createLogger` |
 | `test/errors.test.ts` | 7 | AC-12 (presentation half) |
+| `test/catalog_to_chat_transport_argv.test.ts` | 10 | catalog → chat → argv integration |
+| `test/cli_resolver_ndjson_turn.test.ts` | 14 | resolve → spawn → NDJSON → session cache, end to end |
+| `test/model_selection_prompt_cache.test.ts` | 16 | model selection, prompt building, session cache |
+| `test/pipeline_stream_session_errors.test.ts` | 17 | stream → session → error pipeline |
+| `test/stream_field_contract_vs_transport.test.ts` | 8 | catalog stream-field contract vs the transport |
 
 ## 2. Traceability — all 16 acceptance criteria
 
@@ -314,7 +330,7 @@ identical, but the UI wiring is VS Code's.
 | # | Item | Status |
 |---|---|---|
 | 1 | All 16 acceptance criteria pass | **met** — §2; 15 automated, AC-16 by manual M2 |
-| 2 | `npm run check` green | **met** — 351/351, both typechecks clean |
+| 2 | `npm run check` green | **met** — 422/422, both typechecks clean |
 | 3 | `npx vsce package` produces a `.vsix` from a clean tree | **met** — 8 files, 32.57 KB, installs as `cmdcode.cmdcode` |
 | 4 | The §7.3 manual smoke test passes on this machine | **partially met** — M2, M3, M4 executed headlessly and pass. M1's model list, streaming and session-id claims pass; the Copilot Chat UI rendering claims are **unverified** for want of a Copilot Chat install (§5, M1) |
 | 5 | The README states the four costs honestly | **met after a fix** — one un-shipped claim corrected (§6, defect 3) |
@@ -331,3 +347,115 @@ identical, but the UI wiring is VS Code's.
 3. **`cmdcode.cliPath` fallthrough** is intentional and now documented in the README, but it is a
    deliberate choice that a future maintainer may want to revisit as a warning rather than a
    silent fallback.
+
+## 9. PR #1 review — concurrency traceability
+
+PR #1 changed `src/cli/process.ts` to hold transport state **per run** instead of on the
+`CliTransport` instance. The six rows below are the new tests in
+`test/transport-concurrency.test.ts`; the last three are pre-existing guards in
+`test/transport-pipeline.test.ts` that the change was required **not** to regress, and which are
+still unmodified on this branch (`git diff main...HEAD -- test/transport-pipeline.test.ts` is
+empty for this PR — the file predates it).
+
+| AC | Test | File | Result |
+|---|---|---|---|
+| AC-04 | `cancel() signals every live run when two runs overlap` | `test/transport-concurrency.test.ts` | **pass** |
+| AC-05 | `cancel() resolves without waiting for any child to close` | `test/transport-concurrency.test.ts` | **pass** |
+| AC-06 | `settling one run does not clear another run's SIGKILL escalation` | `test/transport-concurrency.test.ts` | **pass** |
+| AC-07 | `a cancel during a live run does not latch against the next run` | `test/transport-concurrency.test.ts` | **pass** |
+| AC-10 | `concurrent runs deliver each run's deltas to its own handlers` | `test/transport-concurrency.test.ts` | **pass** |
+| AC-12 | `an empty cwd inherits the parent directory rather than failing the spawn` | `test/transport-concurrency.test.ts` | **pass** |
+| AC-08 | `does not run a turn cancelled before it spawned` | `test/transport-pipeline.test.ts` (unmodified) | **pass** |
+| AC-09 | the four cancellation/deadline tests under `transport: cancellation (§5.3)` and `transport: deadline (§5.4)` | `test/transport-pipeline.test.ts` (unmodified) | **pass** |
+| AC-11 | `never lets run reject, on any path` | `test/transport-pipeline.test.ts` (unmodified) | **pass** |
+
+The contract these tests lock in is stated on the interface itself, in the `cancel()` doc comment
+on `CliTransport` in `src/types.ts`: it **signals every live run**, it **does not wait** for any
+child to close, and the **SIGKILL escalation** — not the promise — is the backstop. The pre-spawn
+latch applies only when no child is live.
+
+### 9.1 Review claim #2 (`cwd: ''` → `ENOENT`) is **disproven**
+
+The incoming review asserted that a `cwd: ''` on the transport fails the spawn with `ENOENT` and
+asked for it to be replaced with `process.cwd()`. **Executed on this tree, that is not what
+happens.** `''` is falsy, so it falls straight through Node's own `if (options.cwd)` normalisation
+and the child inherits the parent's working directory. A real `spawn` with `cwd: ''` exits `0`
+and fires no `error` event.
+
+The fix was therefore **not** applied — it would have changed nothing. What was done instead is
+lock the observed behaviour in: `an empty cwd inherits the parent directory rather than failing
+the spawn` in `test/transport-concurrency.test.ts` (AC-12 above) uses the **real** `spawn`, not
+the injected `SpawnFn`, precisely so the claim cannot be re-found by a later reader. The
+transport does resolve `cwd` per run (§4.5), so the same reasoning holds for the production
+path.
+
+### 9.2 The AC-16 `sed` range is unbounded **by construction**
+
+The check
+
+```bash
+sed -n '/Abort the in-flight run/,/^  \*\//p' src/types.ts | grep -qiE 'escalat|does not wait|SIGKILL'
+```
+
+exits 0, and it is worth knowing exactly what it proves. The end pattern needs a line whose
+first two characters are `*/` at two spaces of indent. `src/types.ts` closes a one-line JSDoc
+with one space and a block with three, so **no line in the file ever matches** and the range runs
+to end-of-file:
+
+```
+$ sed -n '/Abort the in-flight run/,/^  \*\//p' src/types.ts | wc -l
+69
+```
+
+So the criterion verifies that the words appear *somewhere at or after* the `cancel` comment,
+not strictly inside it. This is a documented property of the criterion, not a latent surprise.
+Two things it must **not** be "fixed" by, both of which were considered and rejected:
+
+- **Deleting the doc comment.** That would make the guarantee unreadable off the interface,
+  which is the whole point of the change.
+- **Hand-indenting one line to two spaces** so the range terminates. It works (4 lines, grep
+  passes), but it is a formatting oddity that any formatter pass silently normalises back to
+  three spaces — reintroducing the unbounded range with no signal at all.
+
+A fix to the anchor's first line is likewise not available. `sed` matches `/Abort the in-flight
+run/` as a **substring**, so the first line must contain those exact bytes. A rephrasing such as
+`Abort every in-flight run` does **not** contain them, yields a zero-line range, and turns a
+passing check into a deterministic AC-16 failure. The first line is `Abort the in-flight run(s) on
+this transport.` for that reason alone.
+
+### 9.3 The AC-02 reporter pipeline was substituted, and the count above is the runner's
+
+The criterion's literal command cannot pass on vitest 5:
+
+```bash
+$ npx vitest run --reporter=json 2>/dev/null | jq '.numPassedTests >= 416'
+jq: parse error: Invalid numeric literal at line 1, column 5     # exit 5
+```
+
+vitest 5.0.2 writes the JSON report to a **file** and prints only a one-line notice to stdout:
+
+```
+JSON report written to /…/.vitest/json/output.json
+```
+
+The working equivalent, which is what the substitution relies on:
+
+```bash
+npx vitest run --reporter=json >/dev/null 2>&1
+jq '.numPassedTests >= 416' .vitest/json/output.json
+```
+
+Its intent — prove that no test was **deleted** — is fully satisfied by the file-based form.
+Recorded here so the next reader does not re-litigate it.
+
+Note that `.vitest/` is untracked and absent from `.gitignore`, so running the JSON reporter
+leaves a dirty tree. It is deliberately left that way: `.gitignore` is outside the PR's
+allowlist, and editing it would fail the diff gate for no functional gain.
+
+**The counts in §1 are the runner's, not this document's.** The per-file table and the
+`20 files, 422 tests, 422 passed` summary come from `npx vitest run 2>&1 | tail -5`, pasted
+verbatim above. They are **not** derived from the plan document's arithmetic — a predicted count
+written into the file that exists to quote real counts is the exact failure this section is
+reacting to. If a future run disagrees with the table, the runner is right and the table is
+stale: re-run the command and re-paste, do not reconcile by hand.
+
