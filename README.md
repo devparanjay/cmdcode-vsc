@@ -1,13 +1,11 @@
 <div align="center">
 
-<img src="media/icon.png" width="128" height="128" alt="Command Code Provider icon">
-
 # Command Code Provider for VS Code
 
 **Use [Command Code](https://commandcode.ai) models inside VS Code and Copilot Chat.**
 
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-devparanjay.command--code--provider-007ACC?style=flat-square&labelColor=1B1B1F)](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider)
-[![Version](https://img.shields.io/badge/version-0.3.0-007ACC?style=flat-square&labelColor=1B1B1F)](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider)
+[![Version](https://img.shields.io/badge/version-0.3.1-007ACC?style=flat-square&labelColor=1B1B1F)](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square&labelColor=1B1B1F)](./LICENSE)
 
 </div>
@@ -194,15 +192,15 @@ retried — a retry would double your token spend for a latency win you may not 
 
 These are known and deliberate, not bugs:
 
-- **The CLI group cannot run Copilot's tools.** The models can call tools, and the CLI runs them —
-  but in-process, never handing them to a host. So Copilot sends it no tool schemas, and its tool
-  work does not appear in the chat's tool UI. Nothing is silently dropped; Copilot simply never
-  asks. **Use the API group for tools, including browser control.** The two groups differ only in
-  transport, so switching is a matter of picking a different entry in the picker.
-- **The CLI group is hidden in Copilot's Agent mode.** VS Code's Agent session only lists models
-  that advertise `toolCalling`, and the CLI path cannot honestly claim it. The models are still
-  there in **Ask** and **Chat**. This is the same fact as the point above, seen from the other
-  side: an Agent-mode entry that silently did nothing would be worse than a missing one.
+- **The CLI group cannot run *Copilot's* tools.** Command Code models can call tools, and the
+  CLI runs them — but in-process, never handing them to a host. So Copilot's own tools and
+  browser control do not run on that group. **Use the API group for those.** Nothing is
+  silently dropped: the CLI simply uses its own tool set.
+- **Tool calling, generally.** The models advertise `toolCalling: true` on both groups so they
+  are selectable in every Copilot session, Agent included — VS Code's Agent mode lists only
+  tool-capable models, and with the flag false a pinned model could never reach the picker. On
+  the API group that flag is backed by a real loop. On the CLI group it reflects the model's
+  own capability, not Copilot's ability to drive it.
 - **The API group needs GOAT or higher.** Go is the vendor's only plan without API access, and the
   server answers `403 upgrade_required`. That error is shown to you verbatim rather than hidden
   behind a silent fallback, because a billing problem should not look like a slower model.
@@ -276,12 +274,21 @@ Start with **Command Code: Show Log** — it records which providers registered,
 | `Command Code: [cli-not-found] …` | The CLI was not found. Install it with `npm i -g command-code`, or set `cmdcode.cliPath`. |
 | `Command Code: [cli-too-old] …` | The CLI does not support `--output-format json`. Update it with `cmd update`. |
 
-**The models are not in the picker at all.** Only the **Agent** session hides them, and only for
-the CLI group — VS Code's Agent mode lists tool-capable models only, and the CLI path cannot
-honestly claim that. Switch to **Ask** or **Chat**, or use the API group.
+**The models are not in the picker at all.** Reload the window (**Developer: Reload Window**)
+after installing or changing a setting — the catalog and capabilities are read once at activation.
+
+**A pinned model does not appear.** Model ids changed in 0.3.1 so that they no longer depend on
+which folder is open — a workspace-scoped id made every pin folder-scoped, and VS Code silently
+drops a pin whose id it no longer recognises. **Unpin the affected models once and re-pin them.**
+Pins made before 0.3.1 are not recoverable.
 
 **Tools do nothing.** Check you are on a model under **Command Code API**. The CLI group runs its
-own tools internally, so Copilot's tool UI stays quiet by design.
+own tools internally, so Copilot's tool UI and browser control stay quiet by design.
+
+**"Model … is not available on this endpoint."** The API serves three different route sets, and
+the extension reads them from the server's own model list. If you see this, the server has changed
+a model's routes since 0.3.1 — please [open an issue](https://github.com/devparanjay/cmdcode-vsc/issues)
+with the model id, and it will be corrected.
 
 **The API group returns `403 upgrade_required`.** Your plan is **Go**, the only plan without API
 access. Upgrade to GOAT or higher, or use the CLI group. The error is shown to you verbatim rather

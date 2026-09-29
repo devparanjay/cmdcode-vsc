@@ -96,10 +96,20 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
       this.catalog,
       this.workspaceFsPath,
       {
-        // The CLI runs its own tools in-process and never yields for a host, so
-        // it cannot participate in Copilot's tool loop. Claiming otherwise is
-        // what produced a Tools chip that never fired; the README says so.
-        toolCalling: false,
+        // Declared true so the models are selectable in EVERY Copilot session,
+        // Agent included, and so a pin actually reaches the picker. This is not a
+        // claim that Copilot drives the CLI's tools — it never does, because the
+        // CLI runs them in-process and never yields. It is a claim that a Cmd
+        // Code model *can* call tools, which is true, and the difference matters
+        // because VS Code's Agent filter drops every model that says false:
+        //
+        //   uZi(m, kind) = kind === "agent" ? suitableForAgentMode(m) : true
+        //
+        // With false, pinning a CLI model produced a pin that could never
+        // resolve into the picker, which reads as "pinned models do not work"
+        // rather than as an honest limitation. The API group is where Copilot's
+        // own tools and browser control actually run; the README says so.
+        toolCalling: true,
         // Images work here, but only when the CLI is told to read them —
         // headless mode has no way to ask the user.
         imagesAvailable: this.config.imageSupport,

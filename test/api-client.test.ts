@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MODELS } from '../src/catalog.js';
 import {
   ProviderApiClient,
   ProviderApiError,
@@ -7,6 +8,7 @@ import {
   MODELS_URL,
   PROVIDER_BASE_URL,
 } from '../src/api/client.js';
+import { endpointsFor, modelsWithoutDeclaredEndpoints } from '../src/api/endpoints.js';
 
 // The base URL is `api.commandcode.ai/provider` — NOT the host root. The root
 // serves the CLI's own private `/alpha/*` backend, which is a different
@@ -127,23 +129,68 @@ describe('ProviderApiClient', () => {
 });
 
 describe('endpointFor', () => {
-  it('routes Claude to the Messages endpoint, from the server declaration', () => {
-    expect(
-      endpointFor({ id: 'claude-sonnet-5', supported_endpoints: ['/v1/messages'] }),
-    ).toBe('messages');
+  // The generated table is transcribed from `GET /provider/v1/models`, which is
+  // public and reports `supported_endpoints` per model. These assertions pin the
+  // three route sets that actually exist, using the models the server named.
+
+  it('routes a Claude model to Messages', () => {
+    expect(endpointFor('claude-sonnet-5')).toBe('/messages');
+    expect(endpointFor('claude-haiku-4-5-20251001')).toBe('/messages');
   });
 
-  it('routes everything else to Responses', () => {
-    expect(
-      endpointFor({ id: 'deepseek/deepseek-v4-pro', supported_endpoints: ['/v1/responses'] }),
-    ).toBe('responses');
+  it('routes an ordinary model to Responses', () => {
+    expect(endpointFor('deepseek/deepseek-v4-pro')).toBe('/responses');
+    expect(endpointFor('gpt-6-astra')).toBe('/responses');
   });
 
-  it('falls back to the documented rule when the list is unavailable', () => {
-    // A model that serves both is routed by what it declares; one that
-    // declares nothing falls back to Claude ⇒ messages, per the docs.
-    expect(endpointFor(undefined)).toBe('responses');
-    expect(endpointFor({ id: 'claude-sonnet-5' })).toBe('messages');
-    expect(endpointFor({ id: 'gpt-6-astra', supported_endpoints: [] })).toBe('responses');
+  it('routes a chat-completions-only model to Chat Completions', () => {
+    // The bug this fixes: these 9 are NOT served by /responses, and the server
+    // answers "Model … is not available on this endpoint. Call it on
+    // /provider/v1/chat/completions instead."
+    for (const id of [
+      'stealth/space-bunny-alpha',
+      'deepseek/deepseek-v4-flash-fast',
+      'Qwen/Qwen3.8-Max-0902',
+      'Qwen/Qwen3.8-Flash',
+      'meituan/LongCat-2.0',
+      'tencent/hy4-preview',
+      'google/gemini-3.7-flash',
+      'inclusionai/ling-3.0-flash-sante:free',
+    ]) {
+      expect(endpointFor(id), id).toBe('/chat/completions');
+    }
+  });
+
+  it('prefers Responses over Chat Completions when a model serves both', () => {
+    // Both are declared; Responses is the dialect the tool loop targets.
+    expect(endpointFor('deepseek/deepseek-v4-pro')).toBe('/responses');
+  });
+
+  it('does not route a model to Messages merely because it is a Claude', () => {
+    // Read from the server, not inferred: every Claude in the API list is
+    // /messages-only today, but a newer one may not be. The table decides.
+    expect(endpointsFor('claude-opus-5')).toEqual(['/messages']);
+  });
+
+  it('falls back to Responses for a model the server did not declare', () => {
+    expect(endpointFor('some/model-not-in-the-list')).toBe('/responses');
+    expect(endpointsFor('some/model-not-in-the-list')).toEqual([]);
+  });
+
+  it('covers every model in the shipped catalog', () => {
+    // A new catalog entry with no endpoint row would 400 on first use, so the
+    // gap is asserted here rather than discovered by a user.
+    expect(modelsWithoutDeclaredEndpoints(MODELS.map((m) => m.id))).toEqual([]);
+  });
+
+  it('declares a route for every catalog model, and only real routes', () => {
+    const real = new Set(['/chat/completions', '/responses', '/messages']);
+    for (const model of MODELS) {
+      const declared = endpointsFor(model.id);
+      expect(declared.length, `${model.id} has no declared route`).toBeGreaterThan(0);
+      for (const route of declared) {
+        expect(real.has(route), `${model.id} declares ${route}`).toBe(true);
+      }
+    }
   });
 });

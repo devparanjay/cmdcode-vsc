@@ -1336,3 +1336,73 @@ first 0.3.0 build swept `.github/ISSUE_TEMPLATE/**` into the VSIX (10 files), no
 - **https://commandcode.ai/models** could not be fetched (the 429 also gates web tools), so
   the CAPS column there is unconfirmed. The CLI catalog is the source until the site is
   reachable, and reconciling the two is exactly what the new issue template is for.
+
+### 11.16 0.3.1 — three defects reported against 0.3.0
+
+**1. `Model "…" is not available on this endpoint`.** The route rule was
+"Claude ⇒ `/messages`, else `/responses`". The API serves **three** route sets, and
+`GET /provider/v1/models` — public, no auth — says which is which:
+
+```
+/chat/completions,/responses   67
+/messages                      10
+/chat/completions               9   ← these 400 on /responses
+```
+
+The 9 include `stealth/space-bunny-alpha`, the model in the report. Routing now reads a
+generated table (`src/api/endpoints.ts`, refreshed by `scripts/sync-endpoints.mjs`), and
+`/chat/completions` got a request builder because its dialect differs structurally: images are
+`image_url` parts, and a tool result is its own `role: "tool"` message rather than a block inside
+the next turn.
+
+**The generator caught four errors in my own hand-built table.** I wrote it from the prose rule
+before writing the script; running the script diffed my version against the server and found four
+newer Claude models I had misrouted. Had I shipped the hand-built table, four models would have
+failed the same way. Verified all 82 rows against the live list:
+
+```
+ALL 82 MODELS MATCH THE LIVE SERVER
+```
+
+**2. Pinned CLI models did not appear.** Two independent causes:
+
+- The CLI group advertised `toolCalling: false`, and VS Code's Agent filter is
+  `uZi(m, kind) = kind === "agent" ? suitableForAgentMode(m) : true` — so in Agent mode a pin had
+  nothing to resolve into. Now `true` on both groups.
+- Deeper: ids were `sha256(workspacePath + "\0" + modelId)`, so they changed with the folder, and
+  `getPinnedModelIds()` filters on `this._modelCache.has(o)`. A pin made in one window was
+  therefore dead in the next, with no error anywhere. The saved pin list confirmed it — three
+  distinct id sets had accumulated, one per workspace including the empty one:
+
+      cmdc-1ee444ab4e33  → resolves only for the EMPTY workspace   (stale)
+      cmdc-40d2ba29729b  → resolves for /Users/paranjay/dev/cmdcode-vsc
+      cmdcode-api/cmdc-40d2ba29729b  → same model, API group, resolved fine
+
+  The API group pinned correctly *because* it shares the same id function and the pin was fresh —
+  which is what pointed at the id scheme rather than at pinning itself. Ids are now
+  `sha256(modelId)`. The per-folder isolation the salt bought was never real: the cwd travels per
+  request (`RunRequest.cwd`), so nothing downstream depended on the hash.
+
+**3. The details-tab icon.** The README's `<img src="media/icon.png">` was a relative path, which
+resolves against the *installed* extension directory rather than the repository, so it 404s in the
+webview. The working reference extension's README contains no `<img>` tag at all — the tab icon
+comes from the manifest, which was always correct. The tag is removed; the packaged icon is a
+valid 128×128 RGBA PNG declared as a `Microsoft.VisualStudio.Services.Icons.Default` asset.
+
+**Executed verification** against installed 0.3.1, real extension host:
+
+```json
+{ "vendors": ["cmdcode", "cmdcode-api"],
+  "cmdcode":     { "total": 82, "tools": 82, "vision": 62 },
+  "cmdcode-api": { "total": 82, "tools": 82, "vision": 62 },
+  "idsUnique": 82 }
+```
+
+`tools: 82` on the CLI group is the pinning fix; ids are now one per model regardless of folder.
+492 passed / 0 failed.
+
+**One repair worth recording:** while removing a stray NUL byte from
+`test/model_selection_prompt_cache.test.ts` I also deleted the NUL that the byte was a *fixture*
+for — a test asserting that a NUL cannot survive an argv element. The suite caught it
+immediately and the fixture is restored as an escape, `\u0000`, which is better style than a raw
+byte in a source file.

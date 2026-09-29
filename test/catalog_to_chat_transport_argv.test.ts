@@ -172,20 +172,23 @@ describe('advertised model -> inverted catalog id -> spawned argv', () => {
     expect(r.spawns).toHaveLength(MODELS.length);
   });
 
-  it('keeps a chat id minted in one workspace from selecting a model in another', () => {
-    // Two windows on two folders. If the inversion ignored the workspace salt,
-    // a selection made in window B would silently run against window A's id.
+  it('resolves the same id in either workspace, so a pin is never folder-scoped', () => {
+    // Two windows on two folders. The id is deliberately workspace-independent:
+    // VS Code drops a pin whose id is not in the live model cache, so a
+    // workspace-salted id made every pin folder-scoped and silently dead. What
+    // differs per window is the cwd, which travels on the request
+    // (`RunRequest.cwd`), not in the id.
     const fromA = toChatInformation([MODELS[0]!], WS_A, CAPS, 'cmdcode')[0]!.id;
 
     expect(findModelByChatId(fromA, WS_A)).toBeDefined();
-    expect(findModelByChatId(fromA, WS_B), 'a chat id must not cross workspaces').toBeUndefined();
+    expect(findModelByChatId(fromA, WS_B)?.id, 'a pin must resolve in any workspace').toBe(
+      MODELS[0]!.id,
+    );
 
-    // The two workspaces also publish disjoint id sets, so picker ids cannot
-    // collide even for the same catalog entry.
-    const idsA = new Set(toChatInformation(MODELS, WS_A, CAPS, 'cmdcode').map((i) => i.id));
-    for (const info of toChatInformation(MODELS, WS_B, CAPS, 'cmdcode')) {
-      expect(idsA.has(info.id), `${info.id} leaked across workspaces`).toBe(false);
-    }
+    // Both windows publish the same id set, which is what makes a pin portable.
+    const idsA = toChatInformation(MODELS, WS_A, CAPS, 'cmdcode').map((i) => i.id);
+    const idsB = toChatInformation(MODELS, WS_B, CAPS, 'cmdcode').map((i) => i.id);
+    expect(idsB).toEqual(idsA);
   });
 });
 

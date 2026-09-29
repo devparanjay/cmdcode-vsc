@@ -154,19 +154,16 @@ export interface ApiModel {
 }
 
 /**
- * True when the model must be reached on the Anthropic Messages endpoint.
+ * The route to call for a model id.
  *
- * Claude answers on `/v1/messages` only, and the API answers a wrong endpoint
- * with a 400 that points at the right one. We route from the server's own
- * `supported_endpoints` when it is present, and fall back to the documented
- * rule (Claude ⇒ `/v1/messages`) only when the list is unavailable.
+ * Delegates to the generated table in `./endpoints.ts`, which is transcribed
+ * from `GET /provider/v1/models` — a public, unauthenticated endpoint. That
+ * matters: routing on "Claude ⇒ /messages, else /responses" looks right and is
+ * wrong twice over. It sends the 9 chat-completions-only models to a route that
+ * refuses them ("Model … is not available on this endpoint"), and it misreads
+ * newer Claude models. The server says which route serves what, so we read it.
+ *
+ * Kept as a re-export so callers have one import for the surface, and so this
+ * function is the single place a route is chosen.
  */
-export function endpointFor(model: ApiModel | undefined): 'messages' | 'responses' {
-  const endpoints = model?.supported_endpoints ?? [];
-  if (endpoints.includes('/v1/messages')) {
-    return 'messages';
-  }
-  // No usable declaration: Claude is the documented special case, everything
-  // else answers on Responses.
-  return model?.id.startsWith('claude-') === true ? 'messages' : 'responses';
-}
+export { routeFor as endpointFor } from './endpoints.js';

@@ -140,12 +140,13 @@ describe('toChatInformation — ids (AC-02)', () => {
     expect(toChatInformation(MODELS, WS, CAPS, 'cmdcode')).toEqual(toChatInformation(MODELS, WS, CAPS, 'cmdcode'));
   });
 
-  it('salts the id with the workspace path, so another workspace gets a disjoint set', () => {
+  it('is identical in another workspace, so a pin made there still resolves', () => {
+    // This is the fix for "pinned models do not appear in the picker": VS Code
+    // drops any pin whose id is not in the live model cache, so a
+    // workspace-derived id made every pin folder-scoped and silently dead. The
+    // working directory is carried per request, not in the id.
     const other = toChatInformation(MODELS, OTHER_WS, CAPS, 'cmdcode');
-    const mine = new Set(info.map((i) => i.id));
-    for (const i of other) {
-      expect(mine.has(i.id), i.id).toBe(false);
-    }
+    expect(other.map((i) => i.id)).toEqual(info.map((i) => i.id));
     expect(new Set(other.map((i) => i.id)).size).toBe(82);
   });
 });
@@ -178,9 +179,11 @@ describe('toChatInformation — the projection is exactly invertible (AC-03)', (
     }
   });
 
-  it('does not resolve an id minted for another workspace', () => {
+  it('resolves an id minted in another workspace, because the id is workspace-independent', () => {
     const [mine] = toChatInformation(MODELS, WS, CAPS, 'cmdcode');
-    expect(findModelByChatId(mine.id, OTHER_WS)).toBeUndefined();
+    // The inverse of the old behaviour, and the point of the change: a pin made
+    // in one folder resolves in another instead of dangling.
+    expect(findModelByChatId(mine.id, OTHER_WS)?.id).toBe(MODELS[0].id);
   });
 });
 

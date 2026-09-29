@@ -885,26 +885,49 @@ export function modelsForPlan(tier: PlanTier): readonly CatalogModel[] {
 }
 
 /**
- * The stable per-model id (architecture §D2): hash of the workspace path and
- * the catalog id, so a vendor rename cannot orphan an existing chat.
+ * The per-model id: hash of the catalog id alone.
  *
- * Shape: `cmdc-` + the first 12 hex characters of
- * sha256(workspaceFsPath + '\0' + catalogId).
+ * Shape: `cmdc-` + the first 12 hex characters of sha256(catalogId).
+ *
+ * ## Why the workspace path is NOT in the hash
+ *
+ * It used to be, to give "per-workspace isolation". That defeated two things
+ * that matter more, and both are user-visible:
+ *
+ *  - **Pins.** VS Code keys a pin on the model identifier, and drops any pin
+ *    whose id is not in the live model cache. A workspace-derived id changes
+ *    with the folder, so a pin made in one window silently stopped resolving in
+ *    the next — reported as "pinned models do not appear", with no error
+ *    anywhere. Opening a folder with no workspace at all minted a *third* set.
+ *  - **Staleness.** The old ids stay pinned in `chatModelPinned` forever,
+ *    because there is no code path that garbage-collects them.
+ *
+ * The isolation it bought was illusory anyway: the working directory is carried
+ * per request (`RunRequest.cwd`), not encoded in the id, so nothing downstream
+ * depended on the hash. The catalog is the same 82 models everywhere, so a
+ * stable id is also the honest one.
+ *
+ * The two provider groups do not collide because VS Code namespaces a model id
+ * by vendor: `cmdcode/cmdc-…` and `cmdcode-api/cmdc-…` are distinct, and each
+ * group is registered by its own provider.
+ *
+ * Migration: ids minted by the old scheme no longer resolve, so a pin made
+ * before this change is dead. Unpin and re-pin once, in the folder you use.
  */
-export function chatIdFor(catalogId: string, workspaceFsPath: string): string {
-  return 'cmdc-' + hash(`${workspaceFsPath}\0${catalogId}`).slice(0, 12);
+export function chatIdFor(catalogId: string, _workspaceFsPath = ''): string {
+  return 'cmdc-' + hash(catalogId).slice(0, 12);
 }
 
 /**
- * Reverse of chatIdFor. Called on the hot path (architecture §4.9 step 2).
+ * Reverse of chatIdFor. Called on the hot path (§4.9 step 2).
  *
- * A linear scan over 82 ids: 82 sha256 digests of ~100 bytes is well under the
- * 1 ms budget in §6.2, so a reverse Map would be a premature optimization that
- * also adds a build step. Deliberate — do not index this.
+ * A linear scan over 82 ids: 82 sha256 digests of ~100 bytes is well under
+ * the 1 ms budget in §6.2, so a reverse Map would be a premature optimization
+ * that also adds a build step. Deliberate — do not index this.
  *
- * @returns undefined when `chatId` was not minted for this workspace.
+ * @returns undefined when `chatId` was not minted for this catalog.
  */
-export function findModelByChatId(chatId: string, workspaceFsPath: string): CatalogModel | undefined {
+export function findModelByChatId(chatId: string, workspaceFsPath = ''): CatalogModel | undefined {
   return MODELS.find((m) => chatIdFor(m.id, workspaceFsPath) === chatId);
 }
 

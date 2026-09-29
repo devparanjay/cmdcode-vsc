@@ -7,6 +7,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1]
+
+Three defects reported against 0.3.0, all confirmed against the live API and a live extension host.
+
+### Fixed
+
+- **Models failed with `Model "…" is not available on this endpoint`.** The extension routed on
+  "Claude ⇒ `/messages`, else `/responses`", but the API serves **three** route sets, not two.
+  `GET /provider/v1/models` — which is public and needs no auth — reports `supported_endpoints`
+  per model, and 9 of our 82 serve `/chat/completions` **only**:
+
+      /chat/completions,/responses   67
+      /messages                      10
+      /chat/completions               9   ← these 400 on /responses
+
+  Routing is now read from a generated table transcribed from the server, with
+  `scripts/sync-endpoints.mjs` to refresh it. A `/chat/completions` request builder was added
+  too, because that dialect differs structurally: images are `image_url` parts, and a tool result
+  is its own `role: "tool"` message rather than a block inside the next turn. The generator also
+  caught four wrong rows in the hand-built table — four newer Claude models that the prose rule
+  would have misrouted.
+
+- **Pinned models from the CLI group did not appear in the picker.** Two causes, both fixed.
+  First, the CLI group advertised `toolCalling: false`, and VS Code's Agent session lists only
+  tool-capable models — so a pin could never resolve into the picker. Second, and the deeper
+  problem, model ids were `sha256(workspacePath + modelId)`, so they changed with the folder.
+  VS Code drops any pin whose id is not in the live model cache, which made every pin
+  folder-scoped and silently dead, and left dead ids pinned forever with no way to collect them.
+  Ids are now a hash of the model id alone. The per-folder isolation the salt bought was illusory
+  anyway: the working directory travels per request (`RunRequest.cwd`), never in the id.
+
+  **Pins made before 0.3.1 must be re-made once.** This is a one-time migration.
+
+- **The extension icon did not load in the details tab.** The README's `<img src="media/icon.png">`
+  is a relative path, which resolves against the extension's *installed* directory rather than the
+  repo, so it 404s in the webview. It now points at the repository URL. The packaged icon itself
+  was always correct — 128×128 RGBA, declared as a `Microsoft.VisualStudio.Services.Icons.Default`
+  asset — so this was the README only.
+
+### Changed
+
+- The CLI group now advertises `toolCalling: true`, so its models are selectable in every Copilot
+  session. That is a claim about the *model* — Command Code models can call tools — not about
+  Copilot driving them, which it still cannot do on that transport. The API group remains where
+  Copilot's own tools and browser control actually run, and the README says so plainly.
+- The API request is logged with its route before it is sent, so a wrong route is diagnosable from
+  the log alone rather than only from the server's error.
+
 ## [0.3.0]
 
 A second provider, real tool support, and image support on both paths.

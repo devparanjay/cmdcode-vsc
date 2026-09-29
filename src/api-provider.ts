@@ -5,6 +5,7 @@ import { toChatInformation, type TransportCapabilities } from './catalog-to-chat
 import { ProviderApiClient, ProviderApiError, endpointFor, type ApiModel } from './api/client.js';
 import { readStream, StreamIncompleteError } from './api/stream.js';
 import { convertTools, type VsCodeTool } from './api/tools.js';
+import type { ApiRoute } from './api/endpoints.js';
 import { buildImagePromptPart } from './images.js';
 import {
   CliError,
@@ -35,6 +36,27 @@ function isDataPart(part: unknown): part is { mimeType: string; data: Uint8Array
   return (
     typeof record.mimeType === 'string' && record.data instanceof Uint8Array
   );
+}
+
+/**
+ * Choose a route from a server-declared set.
+ *
+ * Same preference as the generated table: `/responses` when offered (the
+ * dialect the tool loop targets), then `/chat/completions`, then `/messages`.
+ * Sent here rather than duplicated so a live model list and the baked-in table
+ * can never disagree about which is preferred.
+ */
+function pickRoute(declared: readonly ApiRoute[]): ApiRoute {
+  if (declared.includes('/responses')) {
+    return '/responses';
+  }
+  if (declared.includes('/chat/completions')) {
+    return '/chat/completions';
+  }
+  if (declared.includes('/messages')) {
+    return '/messages';
+  }
+  return '/responses';
 }
 
 /**
@@ -104,9 +126,15 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       throw new Error(`Unknown model: ${model.id}`);
     }
 
-    const endpoint = endpointFor(
-      this.apiModels.find((m) => m.id === catalogModel?.id),
-    );
+    // Route from the model's id against the generated table, which is
+    // transcribed from the server's own `supported_endpoints`. A live
+    // `apiModels` entry, when we have one, takes precedence so a server-side
+    // change lands without a new release.
+    const live = this.apiModels.find((m) => m.id === catalogModel.id);
+    const endpoint: ApiRoute =
+      live !== undefined && live.supported_endpoints !== undefined && live.supported_endpoints.length > 0
+        ? pickRoute(live.supported_endpoints as readonly ApiRoute[])
+        : endpointFor(catalogModel.id);
 
     // Tools. `mcp` entries are rewritten to `function` and, under ZDR, anything
     // outside the safe set is removed — the API fails the whole request
@@ -124,18 +152,22 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       );
     }
 
-    const body = this.buildRequest(catalogModel, messages, tools, endpoint, token);
+    const body = this.buildRequest(
+      catalogModel,
+      messages,
+      tools,
+      endpoint,
+      this.config.imageSupport,
+    );
+    // Logged before the call, so a wrong route is diagnosable from the log alone
+    // rather than only from the server's error.
     this.log.info(
-      `api: POST /provider/v1/${endpoint === 'messages' ? 'messages' : 'responses'} model=${catalogModel?.id} tools=${tools.length} zdr=${this.config.zeroDataRetention}`,
+      `api: POST /provider/v1${endpoint} model=${catalogModel?.id} tools=${tools.length} zdr=${this.config.zeroDataRetention}`,
     );
 
     let response: Response;
     try {
-      response = await this.client.post(
-        `/v1/${endpoint === 'messages' ? 'messages' : 'responses'}`,
-        body,
-        'text/event-stream',
-      );
+      response = await this.client.post(`/v1${endpoint}`, body, 'text/event-stream');
     } catch (error) {
       throw this.toUserFacingError(error);
     }
@@ -149,7 +181,13 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
     try {
       await readStream(
         response,
-        endpoint === 'messages' ? 'anthropic' : 'responses',
+        // Each route speaks its own SSE dialect. Picking the wrong decoder would
+        // silently yield no text, so this follows the route exactly.
+        endpoint === '/messages'
+          ? 'anthropic'
+          : endpoint === '/chat/completions'
+            ? 'chat-completions'
+            : 'responses',
         {
           onText: (delta) => {
             sawText = true;
@@ -199,34 +237,113 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
     model: CatalogModel,
     messages: readonly vscode.LanguageModelChatRequestMessage[],
     tools: readonly { type: 'function'; name: string; description: string; parameters: object }[],
-    endpoint: 'messages' | 'responses',
-    token: vscode.CancellationToken,
+    endpoint: ApiRoute,
+    imageSupport: boolean,
   ): Record<string, unknown> {
-    if (endpoint === 'messages') {
+    if (endpoint === '/messages') {
       // Anthropic Messages: system is a top-level param, images are typed blocks.
       return {
         model: model.id,
-        max_tokens: model.contextWindow > 0 ? 32_000 : 32_000,
+        max_tokens: 32_000,
         system: this.renderSystem(),
         messages: messages.map((m) => ({
           role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
-          content: this.renderContentBlocks(m, 'anthropic'),
+          content: this.renderContentBlocks(m, 'anthropic', imageSupport),
         })),
         tools,
         stream: true,
       };
     }
+
+    if (endpoint === '/chat/completions') {
+      // Nine models serve only this route, so it is not a rare path. It has no
+      // `input_image` block: images are `image_url` parts with a data URL, and
+      // tool results are a separate `role: "tool"` message keyed by tool_call_id.
+      return {
+        model: model.id,
+        messages: this.renderChatCompletionsMessages(messages, imageSupport),
+        tools,
+        stream: true,
+        stream_options: { include_usage: true },
+      };
+    }
+
     // OpenAI Responses.
     return {
       model: model.id,
       instructions: this.renderSystem(),
       input: messages.map((m) => ({
         role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
-        content: this.renderContentBlocks(m, 'openai'),
+        content: this.renderContentBlocks(m, 'openai', imageSupport),
       })),
       tools,
       stream: true,
     };
+  }
+
+  /**
+   * Flatten the request into Chat Completions messages.
+   *
+   * The one structural difference that matters: a tool result is its own
+   * message with `role: "tool"` and a `tool_call_id`, not a content block
+   * inside the next user turn. Getting this wrong means the model never sees
+   * the result of a call Copilot ran for it.
+   */
+  private renderChatCompletionsMessages(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    imageSupport: boolean,
+  ): unknown[] {
+    const out: unknown[] = [];
+    for (const message of messages) {
+      const isAssistant = message.role === vscode.LanguageModelChatMessageRole.Assistant;
+      const content: unknown[] = [];
+      const toolCalls: unknown[] = [];
+
+      for (const part of message.content) {
+        if (part instanceof vscode.LanguageModelTextPart) {
+          content.push({ type: 'text', text: part.value });
+          continue;
+        }
+        if (isDataPart(part) && imageSupport) {
+          const dataUrl = buildImagePromptPart(part);
+          if (dataUrl !== null) {
+            // `image_url`, not Responses' `input_image`.
+            content.push({ type: 'image_url', image_url: { url: dataUrl } });
+          }
+          continue;
+        }
+        if (part instanceof vscode.LanguageModelToolCallPart) {
+          toolCalls.push({
+            id: part.callId,
+            type: 'function',
+            function: { name: part.name, arguments: JSON.stringify(part.input) },
+          });
+          continue;
+        }
+        if (part instanceof vscode.LanguageModelToolResultPart) {
+          // Its own message, keyed to the call it answers.
+          out.push({
+            role: 'tool',
+            tool_call_id: part.callId,
+            content: part.content
+              .map((c) => (c instanceof vscode.LanguageModelTextPart ? c.value : ''))
+              .join(''),
+          });
+        }
+      }
+
+      if (content.length > 0 || toolCalls.length > 0) {
+        const entry: Record<string, unknown> = {
+          role: isAssistant ? 'assistant' : 'user',
+          content: content.length > 0 ? content : '',
+        };
+        if (toolCalls.length > 0) {
+          entry.tool_calls = toolCalls;
+        }
+        out.push(entry);
+      }
+    }
+    return out;
   }
 
   /** Project instructions as a system directive, preserving the CLI's cwd. */
@@ -245,6 +362,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
   private renderContentBlocks(
     message: vscode.LanguageModelChatRequestMessage,
     dialect: 'anthropic' | 'openai',
+    imageSupport: boolean,
   ): unknown[] {
     const parts: unknown[] = [];
     for (const part of message.content) {
@@ -256,7 +374,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       // yet in the stable typings, so it is matched structurally. A part that
       // is neither text nor image-shaped is dropped rather than guessed at.
       if (isDataPart(part)) {
-        if (this.config.imageSupport) {
+        if (imageSupport) {
           const dataUrl = buildImagePromptPart(part);
           if (dataUrl !== null) {
             parts.push(
