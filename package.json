@@ -1,6 +1,6 @@
 {
   "name": "cmdcode",
-  "displayName": "Cmd Code",
+  "displayName": "Command Code",
   "description": "Use Command Code as a Language Model Provider in VS Code's AI features, including Copilot Chat.",
   "version": "0.1.1",
   "publisher": "cmdcode",
@@ -35,7 +35,7 @@
     "languageModelChatProviders": [
       {
         "vendor": "cmdcode",
-        "displayName": "Cmd Code"
+        "displayName": "Command Code"
       }
     ],
     "commands": [

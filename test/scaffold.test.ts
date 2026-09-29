@@ -115,12 +115,23 @@ describe('extension manifest', () => {
     const providers = manifest.contributes.languageModelChatProviders;
     expect(providers).toHaveLength(1);
     expect(providers[0].vendor).toBe('cmdcode');
-    // The name Copilot Chat renders next to the model list.
-    expect(providers[0].displayName).toBe('Cmd Code');
+    // The name Copilot Chat renders next to the model list, and the one the
+    // picker groups by. The vendor id stays `cmdcode` — renaming the display
+    // name must not orphan a model id, which is derived from VENDOR_ID.
+    expect(providers[0].displayName).toBe('Command Code');
   });
 
   it('activates on the vendor event its own contribution generates', () => {
     expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode');
+  });
+
+  it('keeps the vendor id stable and distinct from the display name', async () => {
+    const { VENDOR_ID } = await import('../src/types.js');
+    // The id is hashed into every `cmdc-` model id, so changing it would orphan
+    // every existing chat. The display name is free to change and did.
+    expect(VENDOR_ID).toBe('cmdcode');
+    expect(manifest.contributes.languageModelChatProviders[0].vendor).toBe(VENDOR_ID);
+    expect(manifest.name).toBe(VENDOR_ID);
   });
 
   it('runs the two typechecks then vitest, in that order', () => {

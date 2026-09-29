@@ -32,6 +32,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   manifest declares it. The manifest and the source were two unconnected string
   literals, so nothing failed until the provider was run inside a real VS Code.
 - The `Machine Learning` category, matching the other language model providers.
+- The provider now appears in the model picker as **Command Code** rather than
+  `Cmd Code`. The vendor id stays `cmdcode`, so no model id changes.
+- The extension itself is listed as **Command Code** in the extensions view.
 - Concurrent turns no longer orphan a live CLI process. `cancel()` signalled only the
   newest of several overlapping runs, so an earlier run kept streaming into a chat the
   user had navigated away from.

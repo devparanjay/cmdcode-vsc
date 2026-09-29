@@ -991,4 +991,68 @@ Copilot Chat session and reading streamed text back into the chat pane is VS Cod
 and needs a signed-in interactive session. The account on this machine is also rate-limited, so a
 live turn would have failed for an unrelated reason anyway.
 
+### 11.10 Provider renamed to "Command Code", and the capability flags VS Code actually reads
+
+The provider's `displayName` changed from `Cmd Code` to `Command Code` (the vendor id stays
+`cmdcode`, so no `cmdc-` model id changes). Verified in a real extension host after reinstalling:
+
+```
+[LM] registering language model provider cmdcode {}
+[LM] Resolved language models for vendor cmdcode [{…"vendor":"cmdcode","name":"DeepSeek V4 Pro (latest)"…}]
+```
+
+zero `UNKNOWN vendor` errors, 82 models resolved.
+
+**On the "Capabilities" column in the Manage Language Models window — there isn't one.** That
+window (`workbench.editor.modelsManagement`) renders a vendor/group tree, not a table with a
+capabilities column. What it does have is a search box with typed filters, hard-coded in the
+workbench bundle:
+
+```js
+nlo={FILTER_TYPES:["@provider:","@capability:"],
+     CAPABILITIES:["@capability:tools","@capability:vision","@capability:agent"]}
+```
+
+So the capability "tags" are **search filters**, not declarations, and they cannot be set. They
+match a model's metadata through `getMatchingCapabilities`:
+
+```js
+case "tools":  e.metadata.capabilities.toolCalling === true → push("toolCalling")
+case "vision": e.metadata.capabilities.vision     === true → push("vision")
+case "agent":  e.metadata.capabilities.agentMode  === true → push("agentMode")
+```
+
+Those three properties are exactly what the ext-host derives from the two fields the stable
+`vscode` API exposes (`extensionHostProcess.js`):
+
+```js
+capabilities: a.capabilities ? {
+  vision:      a.capabilities.imageInput,
+  editTools:   a.capabilities.editTools,
+  toolCalling: !!a.capabilities.toolCalling,
+  agentMode:   !!a.capabilities.toolCalling
+} : void 0
+```
+
+Observed in this extension's own resolved metadata, which is the ground truth for why the filters
+currently match nothing:
+
+```json
+"capabilities":{"vision":false,"toolCalling":false,"agentMode":false}
+```
+
+**`toolCalling` and `agentMode` are the same field.** The stable API has no separate agent switch,
+so claiming either one claims both. All three filters are therefore unavailable to this extension
+while `src/catalog-to-chat.ts:26` declines both `imageInput` and `toolCalling` — which is the
+correct behaviour, not an oversight. Copilot does have a documented tool loop, but print mode
+returns text deltas with no channel to return a tool result on, so advertising the flag would make
+Copilot send tools the adapter drops. That trade-off is §D5 in the architecture and is asserted by
+`test/provider.test.ts`. Setting these flags would be a real feature, not a metadata edit, and it
+would have to land with a working tool-result round trip.
+
+**Pinning is not a capability.** It is per-model and user-owned (`chatModelPinned`), with the
+picker honouring `chatModelVisibility` / `chatModelPinned` for every vendor equally. Nothing in
+the extension controls it; the 82 models are pinnable today.
+
+
 
