@@ -28,12 +28,25 @@ export interface VsCodeTool {
   readonly inputSchema?: object;
 }
 
-/** A tool in the OpenAI Responses `function` shape the API expects. */
+/**
+ * A tool in the OpenAI function-tool shape the API expects.
+ *
+ * NESTED, not flat: the shape is `{ type: "function", function: { … } }`. A flat
+ * `{ type, name, parameters }` sends `function` as `undefined`, which the server
+ * rejects with:
+ *
+ *   Invalid input: expected object, received undefined
+ *
+ * That is the same shape a streamed tool CALL comes back in, so keeping the two
+ * identical is also what makes a call and its definition line up.
+ */
 export interface ApiFunctionTool {
   readonly type: 'function';
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: object;
+  readonly function: {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: object;
+  };
 }
 
 /** A tool we could not convert, with the reason, so the caller can report it. */
@@ -133,9 +146,11 @@ export function convertTools(tools: readonly VsCodeTool[], zeroDataRetention: bo
     // not what it can do, and flattening it is what the docs instruct.
     converted.push({
       type: 'function',
-      name: tool.name,
-      description: tool.description ?? '',
-      parameters: resolveSchema(typed) ?? { type: 'object', properties: {} },
+      function: {
+        name: tool.name,
+        description: tool.description ?? '',
+        parameters: resolveSchema(typed) ?? { type: 'object', properties: {} },
+      },
     });
   }
 

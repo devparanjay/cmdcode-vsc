@@ -40,6 +40,30 @@ export class LanguageModelDataPart {
   }
 }
 
+/**
+ * The tool parts the provider `instanceof`-checks on the way back in.
+ *
+ * Present because `api-provider.ts` narrows request content with
+ * `instanceof vscode.LanguageModelToolResultPart` / `…ToolCallPart`. Without them
+ * the check evaluates `undefined` and throws "Right-hand side of 'instanceof' is
+ * not an object", which is a stub gap rather than a product bug — so they are
+ * declared here to keep the provider's narrowing path testable.
+ */
+export class LanguageModelToolCallPart {
+  constructor(
+    public callId: string,
+    public name: string,
+    public input: object,
+  ) {}
+}
+
+export class LanguageModelToolResultPart {
+  constructor(
+    public callId: string,
+    public content: readonly unknown[],
+  ) {}
+}
+
 // ─── Events ──────────────────────────────────────────────────────────────────
 
 export interface Disposable {

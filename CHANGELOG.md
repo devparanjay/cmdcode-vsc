@@ -7,6 +7,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2]
+
+### Fixed
+
+- **Every API message failed with `Invalid input: expected object, received undefined`.** Tool
+  definitions were sent **flat** — `{ type, name, parameters }` — while the schema wants
+  `{ type: "function", function: { name, parameters } }`. A flat definition carries no `function`
+  key at all, which the server reads as undefined. The two shapes were inconsistent within the
+  same file: tool *calls* were already sent nested, only the definitions were not.
+- **Anthropic's tool shape is not OpenAI's.** `/messages` takes tools flat with `input_schema`,
+  so the converted definition is reshaped per route rather than sent as-is.
+- **`tools` is now omitted when there are none.** Every documented example carries no `tools` key,
+  and an empty array is the likeliest trigger for a schema that expects at least one entry.
+
+### Added
+
+- `test/api-request-body.test.ts`, which captures the exact JSON sent on the wire for all three
+  routes and asserts the tool shape, the URL, and that no field is `undefined`. Verified against
+  the 0.3.1 shape: **8 of its assertions fail** when the definitions are reverted to flat, so this
+  cannot regress silently again.
+- `LanguageModelToolCallPart` and `LanguageModelToolResultPart` in the `vscode` test stub. The
+  provider narrows request content with `instanceof` against them, and without them the check
+  evaluates `undefined`.
+
 ## [0.3.1]
 
 Three defects reported against 0.3.0, all confirmed against the live API and a live extension host.

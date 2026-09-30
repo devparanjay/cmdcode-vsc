@@ -19,11 +19,35 @@ describe('convertTools', () => {
     expect(tools).toEqual([
       {
         type: 'function',
-        name: 'read_file',
-        description: 'Read a file from the workspace',
-        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        // NESTED. A flat `{ type, name, parameters }` sends `function` as
+        // undefined, which the API rejects with "Invalid input: expected
+        // object, received undefined" — the bug this shape fixes.
+        function: {
+          name: 'read_file',
+          description: 'Read a file from the workspace',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        },
       },
     ]);
+  });
+
+  it('never emits a flat tool definition, which the API rejects', () => {
+    // A regression guard for the shape that caused the 0.3.1 failure: every
+    // tool must carry a `function` object holding the definition.
+    const { tools } = convertTools(
+      [
+        { name: 'a' },
+        { name: 'b', description: 'd', inputSchema: { type: 'object', properties: {} } },
+        { name: 'c', type: 'mcp', server: { inputSchema: { type: 'object' } } },
+      ] as unknown as VsCodeTool[],
+      false,
+    );
+    for (const tool of tools) {
+      expect(tool.type).toBe('function');
+      expect(tool.function, tool.function.name).toBeDefined();
+      expect(typeof tool.function.name).toBe('string');
+      expect(typeof tool.function.parameters).toBe('object');
+    }
   });
 
   it('rewrites an mcp tool to type function, as the docs instruct', () => {
@@ -67,7 +91,7 @@ describe('convertTools', () => {
       type: 'mcp',
       server: { inputSchema: { type: 'object', properties: { q: { type: 'string' } } } },
     } as unknown as VsCodeTool;
-    expect(convertTools([nested], false).tools[0].parameters).toEqual({
+    expect(convertTools([nested], false).tools[0].function.parameters).toEqual({
       type: 'object',
       properties: { q: { type: 'string' } },
     });
@@ -75,12 +99,12 @@ describe('convertTools', () => {
 
   it('falls back to an empty object schema rather than inventing one', () => {
     const bare = { name: 'ping' } as VsCodeTool;
-    expect(convertTools([bare], false).tools[0].parameters).toEqual({
+    expect(convertTools([bare], false).tools[0].function.parameters).toEqual({
       type: 'object',
       properties: {},
     });
     // A missing description is not an error either.
-    expect(convertTools([bare], false).tools[0].description).toBe('');
+    expect(convertTools([bare], false).tools[0].function.description).toBe('');
   });
 
   it('drops nothing when zero data retention is off', () => {
@@ -114,7 +138,12 @@ describe('convertTools', () => {
     ] as unknown as VsCodeTool[];
 
     const { tools: converted, dropped } = convertTools(tools, true);
-    expect(converted.map((t) => t.name)).toEqual(['ok_fn', 'ok_custom', 'ok_shell', 'ok_mcp']);
+    expect(converted.map((t) => t.function.name)).toEqual([
+      'ok_fn',
+      'ok_custom',
+      'ok_shell',
+      'ok_mcp',
+    ]);
     expect(converted.every((t) => t.type === 'function')).toBe(true);
     expect(dropped.map((d) => d.name)).toEqual(['refused_web']);
     for (const d of dropped) {

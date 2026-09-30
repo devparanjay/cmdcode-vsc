@@ -2,7 +2,7 @@
   "name": "command-code-provider",
   "displayName": "Command Code Provider",
   "description": "Use Command Code models in VS Code's AI features, including Copilot Chat.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "devparanjay",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",

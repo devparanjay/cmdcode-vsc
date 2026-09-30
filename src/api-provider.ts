@@ -4,7 +4,7 @@ import { findModelByChatId } from './catalog.js';
 import { toChatInformation, type TransportCapabilities } from './catalog-to-chat.js';
 import { ProviderApiClient, ProviderApiError, endpointFor, type ApiModel } from './api/client.js';
 import { readStream, StreamIncompleteError } from './api/stream.js';
-import { convertTools, type VsCodeTool } from './api/tools.js';
+import { convertTools, type ApiFunctionTool, type VsCodeTool } from './api/tools.js';
 import type { ApiRoute } from './api/endpoints.js';
 import { buildImagePromptPart } from './images.js';
 import {
@@ -236,12 +236,14 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
   private buildRequest(
     model: CatalogModel,
     messages: readonly vscode.LanguageModelChatRequestMessage[],
-    tools: readonly { type: 'function'; name: string; description: string; parameters: object }[],
+    tools: readonly ApiFunctionTool[],
     endpoint: ApiRoute,
     imageSupport: boolean,
   ): Record<string, unknown> {
     if (endpoint === '/messages') {
-      // Anthropic Messages: system is a top-level param, images are typed blocks.
+      // Anthropic Messages: system is a top-level param, images are typed
+      // blocks, and tools are FLAT with `input_schema` — not the nested
+      // `{ type, function: { … } }` shape the OpenAI routes use.
       return {
         model: model.id,
         max_tokens: 32_000,
@@ -250,7 +252,18 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
           role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
           content: this.renderContentBlocks(m, 'anthropic', imageSupport),
         })),
-        tools,
+        // Omitted when empty: every documented example carries no `tools` key,
+        // and an empty array is the likeliest trigger for a schema that expects
+        // at least one entry to produce "expected object, received undefined".
+        ...(tools.length > 0
+          ? {
+              tools: tools.map((t) => ({
+                name: t.function.name,
+                description: t.function.description,
+                input_schema: t.function.parameters,
+              })),
+            }
+          : {}),
         stream: true,
       };
     }
@@ -262,7 +275,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       return {
         model: model.id,
         messages: this.renderChatCompletionsMessages(messages, imageSupport),
-        tools,
+        ...(tools.length > 0 ? { tools } : {}),
         stream: true,
         stream_options: { include_usage: true },
       };
@@ -276,7 +289,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
         role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
         content: this.renderContentBlocks(m, 'openai', imageSupport),
       })),
-      tools,
+      ...(tools.length > 0 ? { tools } : {}),
       stream: true,
     };
   }

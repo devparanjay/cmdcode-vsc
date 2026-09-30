@@ -1406,3 +1406,52 @@ valid 128×128 RGBA PNG declared as a `Microsoft.VisualStudio.Services.Icons.Def
 for — a test asserting that a NUL cannot survive an argv element. The suite caught it
 immediately and the fixture is restored as an escape, `\u0000`, which is better style than a raw
 byte in a source file.
+
+### 11.17 0.3.2 — every API message failed: flat tool definitions
+
+**Symptom.** Every message on the API group returned `Invalid input: expected object,
+received undefined`, from Zod validation before any model work.
+
+**Cause.** `convertTools` produced a **flat** tool definition:
+
+```ts
+{ type: 'function', name, description, parameters }     // ← sent
+```
+
+while the schema wants the nested form:
+
+```ts
+{ type: 'function', function: { name, description, parameters } }
+```
+
+A flat object serialises with **no `function` key at all**, which the server reads as `undefined`
+— precisely the error. The inconsistency was visible in the same file: tool *calls* were already
+built nested (`function: { name, arguments }`), only the *definitions* were not.
+
+Two further defects in the same area, both fixed:
+
+- **`/messages` takes Anthropic's tool shape**, which is flat with `input_schema` — not OpenAI's
+  nested form. One converted shape was being sent to all three routes, so the 10 Claude models
+  would have been served a shape they cannot read.
+- **`tools: []` was always sent**, even when VS Code supplied no tools. Every documented example
+  omits the key entirely, and an empty array is the likeliest trigger for a schema that expects at
+  least one entry. It is now omitted when empty.
+
+**Why it was not caught before.** Every earlier test asserted the *converted object* or the
+*SSE frames*, never the **serialised request body**. A shape error in the body is invisible to
+both. `test/api-request-body.test.ts` now captures the exact JSON the provider puts on the wire
+for all three routes and asserts the tool shape, the URL, and that no field is `undefined`.
+Reverting the definition to flat fails **8** of its assertions, so the regression cannot pass
+silently again.
+
+The same work surfaced a **stub gap**: `LanguageModelToolCallPart` and `LanguageModelToolResultPart`
+were absent from the `vscode` test stub, so the provider's `instanceof` narrowing threw "Right-hand
+side of 'instanceof' is not an object". Both classes are now declared, with a comment saying they
+exist for that narrowing path.
+
+`npm run check`: **501 passed / 0 failed**. The shipped bundle was checked after packaging: the
+nested definition and `input_schema` are present and the flat shape is gone.
+
+**Still unverified:** a live request. No API key is available in this environment, so the wire
+format is verified by construction and by unit tests against a captured body, not by a real round
+trip. That is the gap that let this ship, and it closes the moment a key is supplied.

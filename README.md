@@ -5,7 +5,7 @@
 **Use [Command Code](https://commandcode.ai) models inside VS Code and Copilot Chat.**
 
 [![Visual Studio Marketplace](https://img.shields.io/badge/Marketplace-devparanjay.command--code--provider-007ACC?style=flat-square&labelColor=1B1B1F)](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider)
-[![Version](https://img.shields.io/badge/version-0.3.1-007ACC?style=flat-square&labelColor=1B1B1F)](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider)
+[![Version](https://img.shields.io/badge/version-0.3.2-007ACC?style=flat-square&labelColor=1B1B1F)](https://marketplace.visualstudio.com/items?itemName=devparanjay.command-code-provider)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square&labelColor=1B1B1F)](./LICENSE)
 
 </div>
