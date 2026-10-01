@@ -7,6 +7,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.4]
+
+The `/responses` dialect is no longer used by default. Both of the last two
+schema defects were in it, and a working reference provider for this same API
+does not use it at all.
+
+### Changed
+
+- **Routes prefer `/chat/completions`.** Every model that declares `/responses`
+  also declares `/chat/completions`, so coverage is unchanged — 73 of the 82
+  catalog models now go there, 9 Claude models go to `/messages`, and
+  `/responses` is a fallback for a model that declares it alone.
+- **`/chat/completions` messages follow the reference provider's shape**: text is
+  the message's `content` as a plain string, an array of parts only when an image
+  is present, a tool call rides as `tool_calls`, and a tool result becomes its own
+  `role: "tool"` message keyed by `tool_call_id`.
+- **No empty content is ever sent.** A message whose parts were all dropped still
+  carries a text block, because an empty `content` array is rejected. This is the
+  reference provider's guard, adopted after reading it.
+
+### Why
+
+0.3.1, 0.3.2 and 0.3.3 were three schema defects in three releases, all in the
+hand-written request path, all in `/responses`. The root cause was the same each
+time: a wire format implemented from its name rather than its specification.
+The reference provider for this API uses two dialects and lets the vendor SDKs
+serialise them, so it has no hand-written content vocabulary to get wrong. This
+release adopts its shape for the one route both share.
+
 ## [0.3.3]
 
 ### Fixed

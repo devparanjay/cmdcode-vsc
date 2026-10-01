@@ -128,29 +128,38 @@ export function modelsWithoutDeclaredEndpoints(modelIds: readonly string[]): str
 /**
  * The route to call for a model.
  *
- * Preference order is deliberate and matches the server's own advice:
- *  1. `/responses` when declared — it is the richer dialect and the one the
- *     tool-calling design targets.
- *  2. `/chat/completions` when that is all the model serves. Nine models are
- *     chat-completions-only, and sending one to `/responses` is a 400.
- *  3. `/messages` for a model that serves only that.
- *  4. A model the server said nothing about falls back to the documented
- *     default rather than a guess that will 400.
+ * ## Why `/chat/completions` is preferred, not `/responses`
+ *
+ * `/responses` was preferred first because it looked like the richer dialect.
+ * That was a mistake paid for twice: `/responses` is the one dialect whose
+ * content-block vocabulary this extension had to hand-build, and a working
+ * reference provider for the same API does not use it at all. It uses
+ * `/chat/completions` and `/messages`, with the vendor SDKs serialising both, and
+ * therefore has no hand-written content-block shapes to get wrong.
+ *
+ * Every model that declares `/responses` also declares `/chat/completions`, so
+ * preferring it costs nothing in coverage. Claude stays on `/messages`, which is
+ * the only route it serves. The result is that the two dialects used here are the
+ * two that are independently verifiable, and `/responses` becomes a fallback for a
+ * model that declares it alone.
+ *
+ * Tool calling works identically on `/chat/completions`: definitions are nested
+ * under `function`, results are a `role: "tool"` message keyed by `tool_call_id`.
  */
 export function routeFor(modelId: string): ApiRoute {
   const declared = BY_ID.get(modelId);
   if (declared !== undefined && declared.length > 0) {
-    if (declared.includes('/responses')) {
-      return '/responses';
-    }
     if (declared.includes('/chat/completions')) {
       return '/chat/completions';
     }
     if (declared.includes('/messages')) {
       return '/messages';
     }
+    if (declared.includes('/responses')) {
+      return '/responses';
+    }
   }
-  return '/responses';
+  return '/chat/completions';
 }
 
 /** The declared routes for a model, for diagnostics and tests. */

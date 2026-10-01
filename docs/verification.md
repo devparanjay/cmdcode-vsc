@@ -1517,3 +1517,61 @@ implemented the three wire formats from their *names* rather than their specs, a
 converted objects rather than the bytes. Each defect was real and each is now guarded by an
 assertion on the serialised body. What remains unverified is still the same thing — no API key in
 this environment, so no live round trip — and that gap is what let all three through.
+
+### 11.19 0.3.4 — stop hand-writing a third dialect, and copy the reference's shape
+
+**The instruction to study the reference was the right one.** Reading
+`devparanjay/minimax-provider-vscode` end to end produced a finding no amount of
+documentation-reading had:
+
+**It never uses `/responses`.** Its entire request surface is two dialects —
+`/chat/completions` and `/messages` — and each is serialised by the vendor SDK
+(`openai`, `@anthropic-ai/sdk`), not by hand. So there is no hand-written content
+vocabulary anywhere in it.
+
+This extension did the opposite: it hand-built three dialects, including
+`/responses`, and shipped three schema defects in three releases — flat tool
+definitions (0.3.1), `text` instead of `input_text`, and `{ image_url: { url } }`
+where a bare string was required (0.3.2, 0.3.3). All three were in the path that
+a single `type` switch was meant to cover, and a single switch is exactly the
+shape that cannot express three different content vocabularies correctly.
+
+**Fix: prefer the dialect that is verifiable.** `/chat/completions` is now the
+route for any model that declares it, which is every model declaring
+`/responses` too:
+
+```
+route distribution for our 82 models:
+   /chat/completions  73
+   /messages           9
+   /responses          0   ← fallback only
+```
+
+Coverage is unchanged, because every model that declares `/responses` also
+declares `/chat/completions`. The third dialect survives only as a fallback for a
+model that declares it alone.
+
+**The Chat Completions body now matches the reference exactly**, which is the
+part worth having:
+
+| | Reference | This extension, now |
+| --- | --- | --- |
+| Text-only message | `content: "<joined text>"` (a string) | same |
+| Text + image | `content: [{type:'text'…},{type:'image_url'…}]` | same |
+| Tool call | `tool_calls: [{id, type:'function', function:{name, arguments}}]` | same |
+| Tool result | its own message, `role:'tool'`, `tool_call_id` | same |
+| Tool definition | `{type:'function', function:{name, description, parameters}}` | same |
+| No tools | `undefined` — omitted entirely | same |
+| Empty parts | a `{type:'text', text:''}` block is substituted | same |
+
+That last row is the reference's own guard, and the omission of this extension
+is why an empty `content` array could reach the server at all.
+
+Verified by capturing the wire body and comparing field by field;
+`npm run check` **510 passed / 0 failed**.
+
+**Still unverified, unchanged and unavoidable here:** no live request. Not having
+the key was the right call on your part, and the correct response was to remove
+the code I could not verify rather than to keep guessing. Two of the three
+releases in this sequence failed on shapes that the reference — which uses two
+SDK-serialised dialects — cannot get wrong.

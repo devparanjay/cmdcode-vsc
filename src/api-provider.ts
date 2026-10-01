@@ -47,16 +47,19 @@ function isDataPart(part: unknown): part is { mimeType: string; data: Uint8Array
  * can never disagree about which is preferred.
  */
 function pickRoute(declared: readonly ApiRoute[]): ApiRoute {
-  if (declared.includes('/responses')) {
-    return '/responses';
-  }
+  // Same order as the generated table, and for the same reason: prefer
+  // /chat/completions because it is the dialect this extension builds correctly
+  // and the one a working reference provider for the same API uses.
   if (declared.includes('/chat/completions')) {
     return '/chat/completions';
   }
   if (declared.includes('/messages')) {
     return '/messages';
   }
-  return '/responses';
+  if (declared.includes('/responses')) {
+    return '/responses';
+  }
+  return '/chat/completions';
 }
 
 /**
@@ -371,10 +374,16 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
   /**
    * Flatten the request into Chat Completions messages.
    *
-   * The one structural difference that matters: a tool result is its own
-   * message with `role: "tool"` and a `tool_call_id`, not a content block
-   * inside the next user turn. Getting this wrong means the model never sees
-   * the result of a call Copilot ran for it.
+   * The structure follows the working reference provider for this same API
+   * exactly, because it is the one shape known to be accepted:
+   *
+   *  - text and image parts accumulate into ONE message whose `content` is the
+   *    plain string, or an array of parts only when an image is present;
+   *  - a tool call rides on the assistant message as `tool_calls`;
+   *  - a tool result becomes its OWN message with `role: "tool"` and a
+   *    `tool_call_id` — never a content block inside the next user turn;
+   *  - an empty-parts message still gets a text block, because an empty
+   *    `content` array is rejected.
    */
   private renderChatCompletionsMessages(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
@@ -383,19 +392,25 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
     const out: unknown[] = [];
     for (const message of messages) {
       const isAssistant = message.role === vscode.LanguageModelChatMessageRole.Assistant;
-      const content: unknown[] = [];
+      const text: string[] = [];
+      const rich: unknown[] = [];
       const toolCalls: unknown[] = [];
+      const toolResults: unknown[] = [];
 
       for (const part of message.content) {
         if (part instanceof vscode.LanguageModelTextPart) {
-          content.push({ type: 'text', text: part.value });
+          if (part.value.length > 0) {
+            text.push(part.value);
+          }
           continue;
         }
         if (isDataPart(part) && imageSupport) {
           const dataUrl = buildImagePromptPart(part);
           if (dataUrl !== null) {
-            // `image_url`, not Responses' `input_image`.
-            content.push({ type: 'image_url', image_url: { url: dataUrl } });
+            // Chat Completions takes `image_url` as an OBJECT — the only route
+            // that does. `/responses` takes a bare string, which is why that
+            // dialect has its own renderer.
+            rich.push({ type: 'image_url', image_url: { url: dataUrl } });
           }
           continue;
         }
@@ -408,8 +423,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
           continue;
         }
         if (part instanceof vscode.LanguageModelToolResultPart) {
-          // Its own message, keyed to the call it answers.
-          out.push({
+          toolResults.push({
             role: 'tool',
             tool_call_id: part.callId,
             content: part.content
@@ -419,10 +433,20 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
         }
       }
 
+      // Tool results precede the message they answer, as separate messages.
+      out.push(...toolResults);
+
+      const joined = text.join('\n');
+      const content: string | unknown[] =
+        rich.length > 0
+          ? [...(joined.length > 0 ? [{ type: 'text', text: joined }] : []), ...rich]
+          : joined;
+
       if (content.length > 0 || toolCalls.length > 0) {
         const entry: Record<string, unknown> = {
           role: isAssistant ? 'assistant' : 'user',
-          content: content.length > 0 ? content : '',
+          // An empty string, never an empty array: the schema rejects the latter.
+          content: content === '' && toolCalls.length > 0 ? '' : content,
         };
         if (toolCalls.length > 0) {
           entry.tool_calls = toolCalls;
@@ -439,12 +463,11 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
   }
 
   /**
-   * Render one message's parts into the endpoint's content shape.
+   * Render one message's parts for `/responses`.
    *
-   * Images become inline data URLs when the model supports them, because the API
-   * accepts image content blocks natively. When `imageSupport` is off, or the
-   * model is text-only, the part is dropped and counted — a text-only model
-   * would otherwise fail the whole request.
+   * Kept for a model that declares no other route. Its content vocabulary is
+   * `input_text` / `input_image`, both of which have bitten before, so it is not
+   * the default any more.
    */
   private renderContentBlocks(
     message: vscode.LanguageModelChatRequestMessage,
@@ -467,16 +490,8 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       // is neither text nor image-shaped is dropped rather than guessed at.
       if (isDataPart(part)) {
         if (imageSupport) {
-          // Anthropic takes raw base64 bytes; the OpenAI routes take a data URL
-          // as a STRING. Responses' `input_image` additionally requires
-          // `detail`, and its `image_url` is a bare string — sending
-          // `{ image_url: { url } }` there is what produces:
-          //
-          //   Invalid input: expected string, received undefined
-          //
-          // Chat Completions is the one route that does take an object,
-          // `{ type: 'image_url', image_url: { url } }`, and it is built
-          // separately in renderChatCompletionsMessages.
+          // Anthropic takes raw base64 bytes; /responses takes a data URL as a
+          // STRING and additionally requires `detail`.
           const dataUrl = buildImagePromptPart(part);
           if (dataUrl !== null) {
             parts.push(
@@ -494,9 +509,12 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
         continue;
       }
       // Tool calls and tool results are handled by the caller, which places
-      // them where each route expects them: top-level items on /responses,
-      // their own `role: "tool"` message on /chat/completions, and a user
-      // message on /messages. They are not content blocks here.
+      // them where each route expects them. They are not content blocks here.
+    }
+    // Never emit an empty content array: the schema rejects it. The reference
+    // applies the same guard, substituting an empty text block.
+    if (parts.length === 0) {
+      parts.push({ type: dialect === 'openai' ? 'input_text' : 'text', text: '' });
     }
     return parts;
   }

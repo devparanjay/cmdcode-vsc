@@ -161,12 +161,36 @@ describe('tool definitions are nested on every route', () => {
 });
 
 describe('each route gets its own URL and body dialect', () => {
-  it('routes an ordinary model to /responses with an input array', async () => {
+  it('routes an ordinary model to /chat/completions with messages', async () => {
+    // /chat/completions is the default for every model that declares it. The
+    // two schema defects in 0.3.2 and 0.3.3 were both in the hand-written
+    // /responses dialect, and a working reference provider for this same API
+    // does not use that route at all.
     const { url, body } = await send('deepseek/deepseek-v4-pro', [textPart('hi')], []);
-    expect(url).toBe('https://api.commandcode.ai/provider/v1/responses');
-    expect(Array.isArray(body['input'])).toBe(true);
-    expect(body['instructions']).toBeTypeOf('string');
+    expect(url).toBe('https://api.commandcode.ai/provider/v1/chat/completions');
+    expect(Array.isArray(body['messages'])).toBe(true);
     expect(body['stream']).toBe(true);
+    expect(body['stream_options']).toEqual({ include_usage: true });
+  });
+
+  it('sends a text-only message as a plain string, not an empty array', async () => {
+    // The reference provider's shape. An empty `content` array is rejected.
+    const { body } = await send('deepseek/deepseek-v4-pro', [textPart('hi')], []);
+    const messages = body['messages'] as { content: unknown }[];
+    expect(messages[0]!.content).toBe('hi');
+  });
+
+  it('uses /chat/completions for every model except Claude', async () => {
+    for (const model of [
+      'deepseek/deepseek-v4-pro',
+      'gpt-6-astra',
+      'stealth/space-bunny-alpha',
+      'google/gemini-3.7-flash',
+      'poolside/laguna-s-2.1-free',
+    ]) {
+      const { url } = await send(model, [textPart('hi')], []);
+      expect(url, model).toBe('https://api.commandcode.ai/provider/v1/chat/completions');
+    }
   });
 
   it('routes a chat-completions-only model to /chat/completions with messages', async () => {
@@ -209,18 +233,50 @@ describe('the text block type is per-dialect', () => {
   // routes use `text`. Sending `text` to /responses left the required string
   // unreadable, so the server answered "expected string, received undefined" on
   // EVERY message — no image, no tool, just plain chat.
-  it('sends input_text to /responses and text elsewhere', async () => {
-    const responses = await send('deepseek/deepseek-v4-pro', [textPart('hello')], []);
-    const input = responses.body['input'] as { role: string; content: { type: string }[] }[];
-    expect(input[0]!.content[0]!.type).toBe('input_text');
+  //
+  // `/responses` is no longer the default route, so this is now a property of the
+  // fallback renderer rather than of the common path.
+  it('sends text on the two default routes', async () => {
+    // Chat Completions sends the joined text as the message's `content` STRING.
+    const chat = await send('deepseek/deepseek-v4-pro', [textPart('hello')], []);
+    const messages = chat.body['messages'] as { content: unknown }[];
+    expect(messages[0]!.content).toBe('hello');
 
-    const chat = await send('stealth/space-bunny-alpha', [textPart('hello')], []);
-    const messages = chat.body['messages'] as { content: { type: string }[] }[];
-    expect(messages[0]!.content[0]!.type).toBe('text');
-
+    // Anthropic uses explicit blocks.
     const claude = await send('claude-sonnet-5', [textPart('hello')], []);
     const anthropic = claude.body['messages'] as { content: { type: string }[] }[];
     expect(anthropic[0]!.content[0]!.type).toBe('text');
+  });
+
+  it('sends input_text to /responses, and never a bare text block there', () => {
+    // /responses is now a fallback, so this asserts the renderer's own contract
+    // directly rather than waiting for a model to route there.
+    const provider = new CommandCodeApiChatProvider(
+      MODELS,
+      new ProviderApiClient({ apiKey: 'k' }),
+      silentLogger(),
+      WS,
+      CONFIG_DEFAULTS,
+      'cmdcode-api',
+    );
+    const render = (
+      provider as unknown as {
+        renderContentBlocks: (
+          m: unknown,
+          d: 'anthropic' | 'openai',
+          i: boolean,
+        ) => { type: string }[];
+      }
+    ).renderContentBlocks.bind(provider);
+
+    const message = { role: 1, name: 'user', content: [new LanguageModelTextPart('hello')] };
+    const openai = render(message, 'openai', true);
+    expect(openai[0]!.type).toBe('input_text');
+    // Never the Chat Completions / Anthropic spelling on this route.
+    expect(openai.map((b) => b.type)).not.toContain('text');
+
+    // The other dialect uses `text`, which is the whole point of the split.
+    expect(render(message, 'anthropic', true)[0]!.type).toBe('text');
   });
 
   it('carries the prompt text on every route', async () => {
@@ -235,6 +291,27 @@ describe('the text block type is per-dialect', () => {
   });
 
   it('names tool blocks per dialect', async () => {
+    // Chat Completions: the result is its own role:"tool" message, and the call
+    // rides as tool_calls on the message that carries it.
+    const chat = await send(
+      'deepseek/deepseek-v4-pro',
+      [
+        textPart('call it'),
+        new LanguageModelToolCallPart('call_1', 'read_file', { path: 'a.ts' }) as never,
+        new LanguageModelToolResultPart('call_1', [textPart('contents')]) as never,
+      ],
+      [TEXT_TOOL],
+    );
+    const messages = chat.body['messages'] as {
+      role: string;
+      tool_call_id?: string;
+      tool_calls?: { function: { name: string } }[];
+    }[];
+    expect(messages.find((m) => m.role === 'tool')?.tool_call_id).toBe('call_1');
+    // The call and its result are never merged into one content block.
+    const withCall = messages.find((m) => m.tool_calls !== undefined);
+    expect(withCall?.tool_calls?.[0]?.function.name).toBe('read_file');
+
     // Anthropic: tool_use / tool_result inside the message content.
     const claude = await send(
       'claude-sonnet-5',
@@ -250,36 +327,6 @@ describe('the text block type is per-dialect', () => {
     expect(types).toContain('tool_use');
     expect(types).toContain('tool_result');
     expect(types).not.toContain('function_call_output');
-
-    // Responses: function_call / function_call_output as top-level siblings.
-    const responses = await send(
-      'deepseek/deepseek-v4-pro',
-      [
-        textPart('call it'),
-        new LanguageModelToolCallPart('call_1', 'read_file', { path: 'a.ts' }) as never,
-        new LanguageModelToolResultPart('call_1', [textPart('contents')]) as never,
-      ],
-      [TEXT_TOOL],
-    );
-    const input = responses.body['input'] as { type?: string }[];
-    const itemTypes = input.map((i) => i.type).filter(Boolean);
-    // Top-level, NOT nested inside a message's content.
-    expect(itemTypes).toContain('function_call');
-    expect(itemTypes).toContain('function_call_output');
-
-    // Chat Completions: the result is its own role:"tool" message.
-    const chat = await send(
-      'stealth/space-bunny-alpha',
-      [
-        textPart('call it'),
-        new LanguageModelToolCallPart('call_1', 'read_file', { path: 'a.ts' }) as never,
-        new LanguageModelToolResultPart('call_1', [textPart('contents')]) as never,
-      ],
-      [TEXT_TOOL],
-    );
-    const messages = chat.body['messages'] as { role: string; tool_call_id?: string }[];
-    const toolMessage = messages.find((m) => m.role === 'tool');
-    expect(toolMessage?.tool_call_id).toBe('call_1');
   });
 });
 
@@ -290,26 +337,28 @@ describe('image blocks are shaped per dialect', () => {
     return new LanguageModelDataPart(PNG, 'image/png') as never;
   }
 
-  it('sends image_url as a bare string plus detail on /responses', async () => {
-    // Sending `{ image_url: { url } }` here is what produced "expected string,
-    // received undefined". Responses wants a string, and `detail` is required.
-    const { body } = await send('deepseek/deepseek-v4-pro', [imagePart()], []);
-    const input = body['input'] as { content: Record<string, unknown>[] }[];
-    const image = input[0]!.content.find((c) => c['type'] === 'input_image');
-    expect(image).toBeDefined();
-    expect(typeof image!['image_url']).toBe('string');
-    expect(String(image!['image_url'])).toMatch(/^data:image\/png;base64,/);
-    expect(image!['detail']).toBeTypeOf('string');
+  it('sends image_url as an object on /chat/completions', async () => {
+    // The default route, and the only one that takes `{ url }`. Sending a bare
+    // string here — the /responses shape — is what produced "expected string,
+    // received undefined".
+    for (const model of ['deepseek/deepseek-v4-pro', 'stealth/space-bunny-alpha']) {
+      const { body } = await send(model, [imagePart()], []);
+      const messages = body['messages'] as { content: Record<string, unknown>[] }[];
+      const image = messages[0]!.content.find((c) => c['type'] === 'image_url');
+      expect(image, model).toBeDefined();
+      const url = image!['image_url'] as { url?: unknown };
+      expect(typeof url.url).toBe('string');
+      expect(url.url).toMatch(/^data:image\/png;base64,/);
+    }
   });
 
-  it('sends image_url as an object on /chat/completions', async () => {
-    // The one route that does take `{ url }`.
-    const { body } = await send('stealth/space-bunny-alpha', [imagePart()], []);
-    const messages = body['messages'] as { content: Record<string, unknown>[] }[];
-    const image = messages[0]!.content.find((c) => c['type'] === 'image_url');
-    expect(image).toBeDefined();
-    const url = image!['image_url'] as { url?: unknown };
-    expect(typeof url.url).toBe('string');
+  it('sends a text-and-image message as a parts array', async () => {
+    // Text and an image together cannot be a plain string, so the message
+    // carries an array — with the text first, as the reference provider does.
+    const { body } = await send('deepseek/deepseek-v4-pro', [textPart('look'), imagePart()], []);
+    const messages = body['messages'] as { content: { type: string }[] }[];
+    const types = messages[0]!.content.map((c) => c.type);
+    expect(types).toEqual(['text', 'image_url']);
   });
 
   it('sends raw base64 bytes on /messages', async () => {

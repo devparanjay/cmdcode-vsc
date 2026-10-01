@@ -138,15 +138,22 @@ describe('endpointFor', () => {
     expect(endpointFor('claude-haiku-4-5-20251001')).toBe('/messages');
   });
 
-  it('routes an ordinary model to Responses', () => {
-    expect(endpointFor('deepseek/deepseek-v4-pro')).toBe('/responses');
-    expect(endpointFor('gpt-6-astra')).toBe('/responses');
+  it('routes an ordinary model to Chat Completions', () => {
+    // /chat/completions is preferred over /responses even where the model
+    // declares both. A working reference provider for this same API uses only
+    // /chat/completions and /messages, so those are the two dialects this
+    // extension can be confident in; /responses is the hand-written one that
+    // produced two schema defects. Coverage is unaffected — every model
+    // declaring /responses also declares /chat/completions.
+    expect(endpointFor('deepseek/deepseek-v4-pro')).toBe('/chat/completions');
+    expect(endpointFor('gpt-6-astra')).toBe('/chat/completions');
+    expect(endpointFor('poolside/laguna-s-2.1-free')).toBe('/chat/completions');
   });
 
   it('routes a chat-completions-only model to Chat Completions', () => {
-    // The bug this fixes: these 9 are NOT served by /responses, and the server
-    // answers "Model … is not available on this endpoint. Call it on
-    // /provider/v1/chat/completions instead."
+    // These 9 declare no other route, and the server answers "Model … is not
+    // available on this endpoint. Call it on /provider/v1/chat/completions
+    // instead." when they are sent to /responses.
     for (const id of [
       'stealth/space-bunny-alpha',
       'deepseek/deepseek-v4-flash-fast',
@@ -161,9 +168,13 @@ describe('endpointFor', () => {
     }
   });
 
-  it('prefers Responses over Chat Completions when a model serves both', () => {
-    // Both are declared; Responses is the dialect the tool loop targets.
-    expect(endpointFor('deepseek/deepseek-v4-pro')).toBe('/responses');
+  it('declares /responses but prefers the route the reference provider uses', () => {
+    // The declaration is still recorded honestly; only the preference changed.
+    expect(endpointsFor('deepseek/deepseek-v4-pro')).toEqual([
+      '/chat/completions',
+      '/responses',
+    ]);
+    expect(endpointFor('deepseek/deepseek-v4-pro')).toBe('/chat/completions');
   });
 
   it('does not route a model to Messages merely because it is a Claude', () => {
@@ -172,8 +183,9 @@ describe('endpointFor', () => {
     expect(endpointsFor('claude-opus-5')).toEqual(['/messages']);
   });
 
-  it('falls back to Responses for a model the server did not declare', () => {
-    expect(endpointFor('some/model-not-in-the-list')).toBe('/responses');
+  it('falls back to Chat Completions for a model the server did not declare', () => {
+    // The documented default, and the dialect this extension builds correctly.
+    expect(endpointFor('some/model-not-in-the-list')).toBe('/chat/completions');
     expect(endpointsFor('some/model-not-in-the-list')).toEqual([]);
   });
 
