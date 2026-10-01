@@ -181,6 +181,12 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
     });
 
     let sawText = false;
+    // A turn that only calls a tool has produced a perfectly good turn: Copilot
+    // runs the call and comes back for the answer. Counting that as "no content"
+    // made the extension answer a working tool call with a diagnostic sentence,
+    // which is worse than silence — reported parts become response content, so
+    // the model reads it back as its own prior turn and retries the same call.
+    let sawToolCall = false;
     try {
       await readStream(
         response,
@@ -197,6 +203,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
             progress.report(new vscode.LanguageModelTextPart(delta));
           },
           onToolCall: ({ callId, name, input }) => {
+            sawToolCall = true;
             // Hand the call to Copilot. This provider never executes a tool —
             // that inversion is the whole point of the API path.
             progress.report(
@@ -225,8 +232,11 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       subscription.dispose();
     }
 
-    if (!sawText) {
-      // A turn that produced no text and no tool call would render as a hang.
+    if (!sawText && !sawToolCall) {
+      // A turn that produced neither text nor a tool call would render as a
+      // hang, so say something — but only then. Reporting this after a tool call
+      // injected a sentence into the transcript that the model then read back as
+      // its own output, which is what drove it to retry a call that had worked.
       progress.report(
         new vscode.LanguageModelTextPart(
           'Command Code returned no content. See the Command Code log.',
