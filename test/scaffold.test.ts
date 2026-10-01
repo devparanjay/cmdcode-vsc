@@ -12,12 +12,15 @@ import * as stub from './vscode-stub.js';
 
 interface Manifest {
   readonly name: string;
+  readonly publisher: string;
+  readonly displayName: string;
   readonly main: string;
   readonly license: string;
   readonly engines: Readonly<Record<string, string>>;
   readonly activationEvents: readonly string[];
   readonly scripts: Readonly<Record<string, string>>;
   readonly contributes: {
+    readonly languageModelChatProviders: ReadonlyArray<{ vendor: string; displayName: string }>;
     readonly commands: ReadonlyArray<{ command: string; title: string }>;
     readonly configuration: {
       readonly properties: Readonly<Record<string, { type: string; default: unknown }>>;
@@ -29,17 +32,24 @@ const manifest: Manifest = JSON.parse(
   readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8'),
 );
 
-/** Architecture §6.1 — the six settings, their types and their defaults. */
+/** Every declared setting, its type, and its shipped default. */
 const CONFIG_DEFAULTS: Readonly<Record<string, { type: string; default: unknown }>> = {
   'cmdcode.cliPath': { type: 'string', default: '' },
   'cmdcode.maxTurns': { type: 'number', default: 24 },
   'cmdcode.timeoutSeconds': { type: 'number', default: 600 },
-  'cmdcode.showThinkingPlaceholder': { type: 'boolean', default: true },
   'cmdcode.maxPromptChars': { type: 'number', default: 900_000 },
   'cmdcode.logLevel': { type: 'string', default: 'normal' },
+  // Vision is a feature and ships on; the API group is offered by default so a
+  // user with a key does not have to discover the switch before it works.
+  'cmdcode.imageSupport': { type: 'boolean', default: true },
+  'cmdcode.enableCliProvider': { type: 'boolean', default: true },
+  'cmdcode.enableApiProvider': { type: 'boolean', default: true },
+  // ZDR is opt-in: it narrows which tools may be sent, so it is never implied.
+  'cmdcode.zeroDataRetention': { type: 'boolean', default: false },
 };
 
 const COMMAND_IDS = [
+  'cmdcode.setApiKey',
   'cmdcode.showLog',
   'cmdcode.copyDiagnostics',
   'cmdcode.restartProvider',
@@ -48,16 +58,28 @@ const COMMAND_IDS = [
 const properties = manifest.contributes.configuration.properties;
 
 describe('extension manifest', () => {
-  it('declares the engine, entry point, activation event and license', () => {
+  it('declares the engine, entry point, activation events and license', () => {
     expect(manifest.engines.vscode).toBe('^1.104.0');
     expect(manifest.main).toBe('./dist/extension.js');
-    expect(manifest.activationEvents).toEqual(['onStartupFinished']);
+    // One activation event per vendor: VS Code generates these from the
+    // languageModelChatProviders contribution, and listing them makes the
+    // dependency explicit in the manifest.
+    expect(manifest.activationEvents).toEqual([
+      'onStartupFinished',
+      'onLanguageModelChatProvider:cmdcode',
+      'onLanguageModelChatProvider:cmdcode-api',
+    ]);
     // SPDX id; `vsce` validates this field and fails packaging on an unknown value.
     expect(manifest.license).toBe('AGPL-3.0-or-later');
   });
 
-  it('names the vsix file cmdcode.cmd-code-vsc', () => {
-    expect(manifest.name).toBe('cmdcode');
+  it('publishes as devparanjay.command-code-provider', () => {
+    // The marketplace identity. It is deliberately NOT the vendor id: the
+    // provider registers under `cmdcode` (VENDOR_ID) while the extension ships
+    // as `command-code-provider`, and the two must never be conflated.
+    expect(manifest.publisher).toBe('devparanjay');
+    expect(manifest.name).toBe('command-code-provider');
+    expect(manifest.displayName).toBe('Command Code Provider');
   });
 
   it('contributes all six settings with the architecture 6.1 types and defaults', () => {
@@ -80,7 +102,73 @@ describe('extension manifest', () => {
     expect(ids).toHaveLength(COMMAND_IDS.length);
     for (const contribution of manifest.contributes.commands) {
       expect(contribution.command.startsWith('commandcode.')).toBe(false);
-      expect(contribution.title.startsWith('Cmd Code:')).toBe(true);
+      expect(contribution.title.startsWith('Command Code:')).toBe(true);
+    }
+  });
+
+  /**
+   * The vendor id the manifest declares is the vendor VS Code admits.
+   *
+   * VS Code holds an allowlist of LM vendors, and only the
+   * `contributes.languageModelChatProviders` extension point populates it. A
+   * `vscode.lm.registerLanguageModelChatProvider` call for a vendor that is not
+   * on that list is rejected by the main process with
+   * `Chat model provider uses UNKNOWN vendor <id>.` — so the extension activates,
+   * logs success, and registers nothing.
+   *
+   * Nothing in `src/` can catch that: the id is a string literal compared to
+   * nothing, and the failure happens in another process after `activate()`
+   * resolves. This test is the only place the two halves meet.
+   */
+  it('contributes the vendor that VENDOR_ID registers under', async () => {
+    const { VENDOR_ID } = await import('../src/types.js');
+    const declared = manifest.contributes.languageModelChatProviders.map((p) => p.vendor);
+
+    expect(declared, 'contributes.languageModelChatProviders is missing or empty').toContain(
+      VENDOR_ID,
+    );
+  });
+
+  it('declares exactly two vendors, each with a display name', () => {
+    const providers = manifest.contributes.languageModelChatProviders;
+    // Two vendors because they are different capabilities, not two modes of one:
+    // the CLI works on every plan but cannot host Copilot's tool loop, and the
+    // Provider API can but needs a key and GOAT-or-higher. A Go-plan user has
+    // one and not the other, and a single vendor would silently swap it.
+    expect(providers).toHaveLength(2);
+    const byVendor = new Map(providers.map((p) => [p.vendor, p.displayName]));
+    expect(byVendor.get('cmdcode')).toBe('Command Code CLI');
+    expect(byVendor.get('cmdcode-api')).toBe('Command Code API');
+  });
+
+  it('activates on the vendor events its own contributions generate', () => {
+    expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode');
+    expect(manifest.activationEvents).toContain('onLanguageModelChatProvider:cmdcode-api');
+  });
+
+  it('keeps the vendor ids stable and distinct from the extension name', async () => {
+    const { VENDOR_ID, API_VENDOR_ID } = await import('../src/types.js');
+    // VENDOR_ID is hashed into every `cmdc-` model id and is what VS Code keys
+    // the provider by, so it is frozen. The marketplace name is free to change
+    // and did (cmdcode → command-code-provider, publisher cmdcode → devparanjay);
+    // conflating the two is exactly the mistake this test guards.
+    expect(VENDOR_ID).toBe('cmdcode');
+    expect(API_VENDOR_ID).toBe('cmdcode-api');
+    const declared = manifest.contributes.languageModelChatProviders.map((p) => p.vendor);
+    expect(declared).toContain(VENDOR_ID);
+    expect(declared).toContain(API_VENDOR_ID);
+    expect(manifest.name).not.toBe(VENDOR_ID);
+  });
+
+  it('keeps the cmdcode.* settings and command namespace', async () => {
+    // Renaming the marketplace identity must not renumber the user's settings
+    // or their keybindings. These are ours, and they are stable API surface.
+    const ids = manifest.contributes.commands.map((c) => c.command);
+    for (const id of ['cmdcode.showLog', 'cmdcode.copyDiagnostics', 'cmdcode.restartProvider']) {
+      expect(ids, `missing command ${id}`).toContain(id);
+    }
+    for (const key of Object.keys(manifest.contributes.configuration.properties)) {
+      expect(key.startsWith('cmdcode.'), `${key} left the cmdcode.* namespace`).toBe(true);
     }
   });
 
@@ -133,7 +221,7 @@ describe('vscode test stub', () => {
     expect(stub.Uri.file('/tmp/ws').fsPath).toBe('/tmp/ws');
     expect(stub.Uri.joinPath(stub.Uri.file('/tmp'), 'AGENTS.md').path).toBe('/tmp/AGENTS.md');
 
-    expect(stub.window.createOutputChannel('Cmd Code').name).toBe('Cmd Code');
+    expect(stub.window.createOutputChannel('Command Code').name).toBe('Command Code');
     expect(stub.commands.registerCommand('cmdcode.showLog', () => {}).dispose).toBeTypeOf(
       'function',
     );

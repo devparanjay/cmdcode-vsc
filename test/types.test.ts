@@ -68,7 +68,6 @@ describe('CONFIG_DEFAULTS', () => {
     expect(CONFIG_DEFAULTS.maxTurns).toBe(24);
     // Seconds × 1000: the manifest default is 600 s, this is ms.
     expect(CONFIG_DEFAULTS.timeoutMs).toBe(600_000);
-    expect(CONFIG_DEFAULTS.showThinkingPlaceholder).toBe(true);
     expect(CONFIG_DEFAULTS.maxPromptChars).toBe(900_000);
     expect(CONFIG_DEFAULTS.logLevel).toBe('normal');
   });

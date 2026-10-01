@@ -18,6 +18,7 @@ function request(over: Partial<RunRequest> = {}): RunRequest {
     resumeSessionId: null,
     cwd: '/tmp/workspace',
     timeoutMs: 600_000,
+    readImages: false,
     ...over,
   };
 }
@@ -73,6 +74,29 @@ describe('buildArgs exact argv', () => {
     const args = buildArgs(request({ prompt }));
     expect(args).toHaveLength(9);
     expect(args[1]).toBe(prompt);
+  });
+});
+
+describe('buildArgs image consent', () => {
+  // Headless mode has no way to ask the user, so image vision resolves to false:
+  //   const e = await getImageVisionEnabled();
+  //   if (void 0 !== e) return e;      // explicit setting wins
+  //   if (!S.askQuestion) return !1;   // headless → refuse
+  // Without this flag every image is silently refused, so it is required — but
+  // only on a turn that actually carries an image, so a text-only turn is not
+  // quietly opting the user into reading images.
+  it('adds imageVisionEnabled only when the turn carries an image', () => {
+    expect(buildArgs(request({ readImages: false }))).not.toContain('imageVisionEnabled=true');
+    const withImage = buildArgs(request({ readImages: true }));
+    expect(withImage).toContain('--config');
+    expect(withImage).toContain('imageVisionEnabled=true');
+  });
+
+  it('keeps the flag as a separate argv element', () => {
+    const args = buildArgs(request({ readImages: true }));
+    const i = args.indexOf('--config');
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe('imageVisionEnabled=true');
   });
 });
 

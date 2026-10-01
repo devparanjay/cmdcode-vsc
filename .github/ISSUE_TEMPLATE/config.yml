@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Command Code — documentation
+    url: https://commandcode.ai/docs
+    about: CLI usage, plans, model list, and the Provider API reference.
+  - name: Command Code — models
+    url: https://commandcode.ai/docs/reference/cli/models
+    about: The authoritative model list, with context, pricing, plan tier, and capabilities.
+  - name: Command Code — Discord
+    url: https://discord.gg/commandcode
+    about: Ask a question or report something the docs do not cover.

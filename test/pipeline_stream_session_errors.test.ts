@@ -310,7 +310,7 @@ describe('the turn pipeline: reader failure surfaces as user-facing copy', () =>
 
     expect(outcome.error?.code).toBe('malformed-stream');
     expect(outcome.presentation).toBe(
-      "Command Code sent output this extension couldn't read. See the Cmd Code log.",
+      "Command Code sent output this extension couldn't read. See the Command Code log.",
     );
     // The offending bytes stay in the log channel, not the notification.
     expect(outcome.presentation).not.toContain(secret);

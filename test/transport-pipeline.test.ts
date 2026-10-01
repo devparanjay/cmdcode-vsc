@@ -103,6 +103,7 @@ function request(over: Partial<RunRequest> = {}): RunRequest {
     resumeSessionId: null,
     cwd: '/tmp/workspace',
     timeoutMs: 0,
+    readImages: false,
     ...over,
   };
 }

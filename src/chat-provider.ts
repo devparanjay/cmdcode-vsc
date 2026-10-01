@@ -3,10 +3,12 @@ import * as vscode from 'vscode';
 import { findModelByChatId } from './catalog.js';
 import { toChatInformation } from './catalog-to-chat.js';
 import { toPresentation } from './errors.js';
+import { isSupportedImage, stageImage } from './images.js';
 import { buildPrompt } from './prompt.js';
 import { TranscriptStore } from './transcript.js';
 import {
   CliError,
+  VENDOR_ID,
   type CatalogModel,
   type CliTransport,
   type CmdCodeConfig,
@@ -14,16 +16,8 @@ import {
   type RunSummary,
 } from './types.js';
 
-/**
- * Short; VS Code has no retract API, so this stays in the transcript.
- *
- * The CLI needs ~3-4 s to produce its first token (§6.2), and silence reads as a
- * hang, so a placeholder is reported before the run starts.
- */
-const THINKING_PLACEHOLDER = 'Working…';
-
 const EMPTY_RESPONSE_MESSAGE =
-  'Command Code finished without returning any text. See the Cmd Code log.';
+  'Command Code finished without returning any text. See the Command Code log.';
 
 /**
  * Verified averages: 18570/3, 18577/60, 18601/3 input/output. Exact tokenization
@@ -31,6 +25,38 @@ const EMPTY_RESPONSE_MESSAGE =
  * budgeting unusable — the estimate is documented as such in the README.
  */
 const CHARS_PER_TOKEN = 4;
+
+/**
+ * Stage every image in the live message to disk and return the paths.
+ *
+ * Fails soft: a part that is not a usable image, or a file that cannot be
+ * written, is skipped rather than failing the turn. A missing image is a
+ * degradation; a thrown error would be a broken chat.
+ */
+function stageImages(message: vscode.LanguageModelChatRequestMessage | undefined): string[] {
+  if (message === undefined) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const part of message.content) {
+    if (part instanceof vscode.LanguageModelTextPart) {
+      continue;
+    }
+    const record = part as { mimeType?: unknown; data?: unknown };
+    if (typeof record.mimeType !== 'string' || !(record.data instanceof Uint8Array)) {
+      continue;
+    }
+    if (!isSupportedImage(record.mimeType)) {
+      continue;
+    }
+    try {
+      paths.push(stageImage({ mimeType: record.mimeType, data: record.data }));
+    } catch {
+      // A staging failure is reported by the caller's part count, not thrown.
+    }
+  }
+  return paths;
+}
 
 /**
  * The single integration point between VS Code and the Command Code CLI.
@@ -66,7 +92,30 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken,
   ): vscode.ProviderResult<vscode.LanguageModelChatInformation[]> {
-    return toChatInformation(this.catalog, this.workspaceFsPath);
+    return toChatInformation(
+      this.catalog,
+      this.workspaceFsPath,
+      {
+        // Declared true so the models are selectable in EVERY Copilot session,
+        // Agent included, and so a pin actually reaches the picker. This is not a
+        // claim that Copilot drives the CLI's tools — it never does, because the
+        // CLI runs them in-process and never yields. It is a claim that a Cmd
+        // Code model *can* call tools, which is true, and the difference matters
+        // because VS Code's Agent filter drops every model that says false:
+        //
+        //   uZi(m, kind) = kind === "agent" ? suitableForAgentMode(m) : true
+        //
+        // With false, pinning a CLI model produced a pin that could never
+        // resolve into the picker, which reads as "pinned models do not work"
+        // rather than as an honest limitation. The API group is where Copilot's
+        // own tools and browser control actually run; the README says so.
+        toolCalling: true,
+        // Images work here, but only when the CLI is told to read them —
+        // headless mode has no way to ask the user.
+        imagesAvailable: this.config.imageSupport,
+      },
+      VENDOR_ID,
+    );
   }
 
   async provideLanguageModelChatResponse(
@@ -86,10 +135,21 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
     }
 
     const cwd = this.workspaceFsPath;
+
+    // The CLI reads images from a *path in the prompt*, so the bytes are staged
+    // to a content-addressed file and the prompt names it. Only the live turn
+    // carries them — the vendor documents that older messages' images are no
+    // longer readable, and a stale path would be worse than nothing.
+    const imagePaths = this.config.imageSupport ? stageImages(messages[messages.length - 1]) : [];
+    if (imagePaths.length > 0) {
+      this.log.info(`staged ${imagePaths.length} image(s) for the CLI to read`);
+    }
+
     const built = await buildPrompt(messages, {
       model: catalogModel.id,
       cwd,
       maxChars: this.config.maxPromptChars,
+      imagePaths,
     });
     if (built.truncatedChars > 0) {
       this.log.info(`prompt truncated: -${built.truncatedChars} chars`);
@@ -97,9 +157,23 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
 
     const resumeSessionId = this.store.get(model.id);
 
-    if (this.config.showThinkingPlaceholder) {
-      progress.report(new vscode.LanguageModelTextPart(THINKING_PLACEHOLDER));
-    }
+    // No placeholder is reported here. The CLI needs ~3-4 s to produce its first
+    // token (§6.2), and this used to fill that silence with a `Working…` text
+    // part — but every part reported to `progress` becomes response *content*.
+    // VS Code concatenates them into the answer with no retract, so the
+    // placeholder was permanently prefixed to the model's reply:
+    //
+    //   "Working…Hello! I'm working in the cmdcode-vsc VS Code extension…"
+    //
+    // The stable API offers no non-content channel for this. `LanguageModelResponsePart`
+    // is a closed union of `LanguageModelTextPart | LanguageModelToolResultPart |
+    // LanguageModelToolCallPart` — all of which are content — and
+    // `ProvideLanguageModelChatResponseOptions` carries no `progress` handle. The
+    // CLI's own tool loop has no streaming status to forward either.
+    //
+    // Copilot renders its own pending state while awaiting the provider, so the
+    // wait is still visibly busy; a fake token is not needed to avoid a spinner.
+    // See docs/verification.md §11.13.
 
     // The transport is not a caller: it fills these in from callbacks, which
     // control-flow analysis cannot follow. A mutable record (rather than four
@@ -129,6 +203,7 @@ export class CmdCodeChatProvider implements vscode.LanguageModelChatProvider {
           resumeSessionId,
           cwd,
           timeoutMs: this.config.timeoutMs,
+          readImages: imagePaths.length > 0,
         },
         {
           onTextDelta: (delta: string) => {

@@ -65,12 +65,15 @@ describe('the model selection path: chat id -> catalog -> prompt', () => {
     }
   });
 
-  it('does not resolve a chat id minted for a different workspace', async () => {
-    // Two windows on two folders must not share a session, and must not share a
-    // model identity either: a chat id is workspace-scoped by construction.
+  it('resolves a chat id minted in a different workspace, because ids are portable', async () => {
+    // Deliberately the inverse of the old behaviour. A workspace-scoped id made
+    // every pin folder-scoped: VS Code drops a pin whose id is not in the live
+    // model cache, so a pin made in one window silently died in the next and
+    // reported as "pinned models do not appear". The cwd still travels per
+    // request, so nothing downstream lost isolation.
     const chatId = chatIdFor(MODELS[0]!.id, cwd);
 
-    expect(findModelByChatId(chatId, join(cwd, 'other'))).toBeUndefined();
+    expect(findModelByChatId(chatId, join(cwd, 'other'))?.id).toBe(MODELS[0]!.id);
   });
 
   it('puts the EXACT catalog id in the prompt, so cmd -m receives an id the CLI accepts', async () => {
@@ -271,7 +274,7 @@ describe('the model selection path: argv boundary between the prompt and the CLI
     expect(build.text).toContain(`<user-now>\n${hostile}\n</user-now>`);
     expect(build.droppedNonTextParts).toBe(0);
     // No NUL, which cannot survive an argv element at all.
-    expect(build.text.includes(' ')).toBe(false);
+    expect(build.text.includes('\u0000')).toBe(false);
   });
 
   it('keeps the live turn intact when the history is full of metacharacters', async () => {

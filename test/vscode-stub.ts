@@ -30,14 +30,52 @@ export class LanguageModelTextPart {
   constructor(public value: string) {}
 }
 
+/**
+ * A binary part as VS Code delivers it to a provider.
+ *
+ * The product matches these **structurally**, not with `instanceof`, because
+ * `LanguageModelDataPart` is not yet in the stable typings. `api-provider.ts`
+ * requires a string `mimeType` and a `Uint8Array` **`data`**:
+ *
+ *   typeof record.mimeType === 'string' && record.data instanceof Uint8Array
+ *
+ * so the stub exposes `data` as the byte field. An earlier `value` field made
+ * every image test fail on an empty content array, which is the same shape of
+ * mistake as a flat tool definition: the test would have passed for the wrong
+ * reason had it only asserted that the request was made.
+ */
 export class LanguageModelDataPart {
-  value: unknown;
-  mimeType?: string;
+  data: Uint8Array;
+  mimeType: string;
 
-  constructor(value: Uint8Array, mimeType?: string) {
-    this.value = value;
+  constructor(data: Uint8Array, mimeType = 'image/png') {
+    this.data = data;
     this.mimeType = mimeType;
   }
+}
+
+/**
+ * The tool parts the provider `instanceof`-checks on the way back in.
+ *
+ * Present because `api-provider.ts` narrows request content with
+ * `instanceof vscode.LanguageModelToolResultPart` / `…ToolCallPart`. Without them
+ * the check evaluates `undefined` and throws "Right-hand side of 'instanceof' is
+ * not an object", which is a stub gap rather than a product bug — so they are
+ * declared here to keep the provider's narrowing path testable.
+ */
+export class LanguageModelToolCallPart {
+  constructor(
+    public callId: string,
+    public name: string,
+    public input: object,
+  ) {}
+}
+
+export class LanguageModelToolResultPart {
+  constructor(
+    public callId: string,
+    public content: readonly unknown[],
+  ) {}
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────

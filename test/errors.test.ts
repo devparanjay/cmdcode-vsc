@@ -66,7 +66,7 @@ describe('toPresentation', () => {
       command: 'cmdcode.showLog',
     });
     expect(present('spawn-failed')).toEqual({
-      message: 'Command Code could not be started. See the Cmd Code log.',
+      message: 'Command Code could not be started. See the Command Code log.',
       action: 'Show Log',
       command: 'cmdcode.showLog',
     });
@@ -121,17 +121,17 @@ describe('toPresentation', () => {
       command: 'cmdcode.copyDiagnostics',
     });
     expect(present('no-response')).toEqual({
-      message: 'Command Code ended without an answer. See the Cmd Code log.',
+      message: 'Command Code ended without an answer. See the Command Code log.',
       action: 'Show Log',
       command: 'cmdcode.showLog',
     });
     expect(present('malformed-stream')).toEqual({
-      message: "Command Code sent output this extension couldn't read. See the Cmd Code log.",
+      message: "Command Code sent output this extension couldn't read. See the Command Code log.",
       action: 'Show Log',
       command: 'cmdcode.showLog',
     });
     expect(present('unknown')).toEqual({
-      message: 'Command Code failed. See the Cmd Code log.',
+      message: 'Command Code failed. See the Command Code log.',
       action: 'Show Log',
       command: 'cmdcode.showLog',
     });

@@ -51,7 +51,7 @@ export const COMMAND_IDS = Object.freeze({
   restartProvider: 'cmdcode.restartProvider',
 });
 
-const COPIED_MESSAGE = 'Cmd Code diagnostics copied.';
+const COPIED_MESSAGE = 'Command Code diagnostics copied.';
 
 /**
  * `cmd --version` for the diagnostics bundle.
@@ -120,7 +120,7 @@ export function registerCommands(
   register(COMMAND_IDS.showLog, () => {
     // `true` keeps the editor focus: revealing a log must not steal keystrokes.
     channel.show(true);
-    log.info('Cmd Code: log revealed by cmdcode.showLog');
+    log.info('Command Code: log revealed by cmdcode.showLog');
   });
 
   register(COMMAND_IDS.copyDiagnostics, async () => {
@@ -144,7 +144,7 @@ export function registerCommands(
     };
     const text = JSON.stringify(bundle, null, 2);
     await vscode.env.clipboard.writeText(text);
-    log.info(`Cmd Code: diagnostics copied (${bundle.models} models, cli ${bundle.cli})`);
+    log.info(`Command Code: diagnostics copied (${bundle.models} models, cli ${bundle.cli})`);
     await vscode.window.showInformationMessage(COPIED_MESSAGE);
   });
 
@@ -153,6 +153,6 @@ export function registerCommands(
     // fires the change event and VS Code calls provideLanguageModelChatInformation
     // again. Nothing is re-read and nothing is re-spawned.
     provider.refreshModelInformation();
-    log.info('Cmd Code: model list refresh requested');
+    log.info('Command Code: model list refresh requested');
   });
 }

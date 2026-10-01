@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+import { ProviderApiClient } from './api/client.js';
+import { CommandCodeApiChatProvider } from './api-provider.js';
 import { CmdCodeChatProvider } from './chat-provider.js';
 import { CliTransportImpl } from './cli/process.js';
 import { resolveCli, supportsJsonOutput, type ResolvedCli } from './cli/resolve.js';
@@ -8,6 +10,7 @@ import { registerCommands } from './commands.js';
 import { toPresentation } from './errors.js';
 import { TranscriptStore } from './transcript.js';
 import {
+  API_VENDOR_ID,
   CliError,
   CONFIG_DEFAULTS,
   VENDOR_ID,
@@ -20,6 +23,11 @@ import {
   type RunRequest,
   type RunSummary,
 } from './types.js';
+
+/** SecretStorage key for the Provider API credential. Never in settings.json. */
+const API_KEY_SECRET = 'commandCode.providerApiKey';
+
+const SET_API_KEY_COMMAND = 'cmdcode.setApiKey';
 
 /**
  * Extension entry point. `activate` is the whole wiring tree's root: it is the
@@ -41,19 +49,19 @@ import {
  *
  * Steps 3's two failure modes return early and register nothing. That is the
  * point: a provider whose every request fails is worse than an absent one, so a
- * broken install degrades to "no Cmd Code models" rather than to an error on
+ * broken install degrades to "no Command Code models" rather than to an error on
  * every chat. `activate` therefore never throws.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // 1. The channel is created first and pushed immediately: steps 3-4 log
   // through it, and a channel nothing holds would leak on deactivation.
-  const channel = vscode.window.createOutputChannel('Cmd Code');
+  const channel = vscode.window.createOutputChannel('Command Code');
   context.subscriptions.push(channel);
 
   // 2. Read once. Everything downstream takes the captured `CmdCodeConfig`.
   const config = readConfig();
   const log = createLogger(channel, config.logLevel);
-  log.info(`Cmd Code: activating (logLevel=${config.logLevel}, models=${MODELS.length})`);
+  log.info(`Command Code: activating (logLevel=${config.logLevel}, models=${MODELS.length})`);
 
   // 3. Resolve the CLI. A null result is `cli-not-found`; the diagnostic
   // message lives in errors.ts, so the copy has exactly one home.
@@ -63,7 +71,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (error) {
     resolved = null;
     log.error(
-      `Cmd Code: resolveCli threw: ${error instanceof Error ? error.message : String(error)}`,
+      `Command Code: resolveCli threw: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
@@ -74,7 +82,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     return;
   }
-  log.info(`Cmd Code: CLI resolved to ${resolved.command} (${resolved.source})`);
+  log.info(`Command Code: CLI resolved to ${resolved.command} (${resolved.source})`);
 
   // 4. The capability probe. Same shape as step 3, different copy.
   let supported: boolean;
@@ -83,7 +91,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (error) {
     supported = false;
     log.error(
-      `Cmd Code: supportsJsonOutput threw: ${error instanceof Error ? error.message : String(error)}`,
+      `Command Code: supportsJsonOutput threw: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
@@ -112,11 +120,80 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     config,
   );
 
-  // 6. The provider, then 7. the commands. Both are pushed to
+  // 6. The providers, then 7. the commands. All are pushed to
   // `context.subscriptions`, so deactivation unregisters them.
-  context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(VENDOR_ID, provider));
+  //
+  // Two vendors, because they are genuinely different capabilities rather than
+  // one provider with a mode: the CLI works on every plan but cannot host
+  // Copilot's tool loop, and the API can but needs a key and a GOAT-or-higher
+  // plan. Either can be turned off independently; the other is unaffected.
+  if (config.enableCliProvider) {
+    context.subscriptions.push(
+      vscode.lm.registerLanguageModelChatProvider(VENDOR_ID, provider),
+    );
+    log.info(`registered vendor ${VENDOR_ID} (${MODELS.length} models, CLI transport)`);
+  } else {
+    log.info(`vendor ${VENDOR_ID} disabled by cmdcode.enableCliProvider`);
+  }
+
+  const apiKey = await context.secrets.get(API_KEY_SECRET);
+  if (config.enableApiProvider) {
+    if (apiKey === undefined || apiKey === '') {
+      // Registering without a key is harmless: the picker shows the group, and
+      // the first turn reports the missing credential rather than a bare 401.
+      log.info(`registered vendor ${API_VENDOR_ID} (no API key yet)`);
+    } else {
+      log.info(`registered vendor ${API_VENDOR_ID} (${MODELS.length} models, API transport)`);
+    }
+    context.subscriptions.push(
+      vscode.lm.registerLanguageModelChatProvider(
+        API_VENDOR_ID,
+        new CommandCodeApiChatProvider(
+          MODELS,
+          new ProviderApiClient({
+            apiKey: apiKey ?? '',
+            zeroDataRetention: config.zeroDataRetention,
+            timeoutMs: config.timeoutMs,
+          }),
+          log,
+          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '',
+          config,
+          API_VENDOR_ID,
+        ),
+      ),
+    );
+  } else {
+    log.info(`vendor ${API_VENDOR_ID} disabled by cmdcode.enableApiProvider`);
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(SET_API_KEY_COMMAND, async () => {
+      const value = await vscode.window.showInputBox({
+        title: 'Command Code API key',
+        prompt:
+          'From https://commandcode.ai/studio#api-keys. Stored in VS Code SecretStorage, never in settings.json.',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (value === undefined) {
+        return;
+      }
+      if (value.trim() === '') {
+        await context.secrets.delete(API_KEY_SECRET);
+        void vscode.window.showInformationMessage(
+          'Command Code API key cleared. Reload the window to apply.',
+        );
+        return;
+      }
+      await context.secrets.store(API_KEY_SECRET, value.trim());
+      void vscode.window.showInformationMessage(
+        'Command Code API key saved. Reload the window to apply.',
+      );
+    }),
+  );
+
   registerCommands(context, provider, transport, log, channel, resolved, config);
-  log.info('Cmd Code: activated');
+  log.info('Command Code: activated');
 }
 
 /**
@@ -153,11 +230,14 @@ function readConfig(): CmdCodeConfig {
     timeoutMs: Number.isFinite(timeoutSeconds)
       ? Math.max(0, Math.round(timeoutSeconds) * 1000)
       : CONFIG_DEFAULTS.timeoutMs,
-    showThinkingPlaceholder: c.get<boolean>('showThinkingPlaceholder', true),
     maxPromptChars: Number.isFinite(maxPromptChars)
       ? Math.max(1_000, Math.round(maxPromptChars))
       : CONFIG_DEFAULTS.maxPromptChars,
     logLevel: c.get<LogLevel>('logLevel', CONFIG_DEFAULTS.logLevel),
+    imageSupport: c.get<boolean>('imageSupport', CONFIG_DEFAULTS.imageSupport),
+    enableCliProvider: c.get<boolean>('enableCliProvider', CONFIG_DEFAULTS.enableCliProvider),
+    enableApiProvider: c.get<boolean>('enableApiProvider', CONFIG_DEFAULTS.enableApiProvider),
+    zeroDataRetention: c.get<boolean>('zeroDataRetention', CONFIG_DEFAULTS.zeroDataRetention),
   };
 }
 
@@ -169,7 +249,7 @@ function readConfig(): CmdCodeConfig {
  * register.
  */
 function reportUsabilityFailure(error: CliError, log: Logger): void {
-  log.error(`Cmd Code: [${error.code}] ${error.message}`);
+  log.error(`Command Code: [${error.code}] ${error.message}`);
   const presentation = toPresentation(error);
   void vscode.window.showErrorMessage(presentation.message);
 }

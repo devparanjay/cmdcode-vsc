@@ -236,10 +236,17 @@ describe('chatIdFor', () => {
     }
   });
 
-  it('differs across workspace paths for every model', () => {
+  it('is the same in every workspace, so a pin survives a folder switch', () => {
+    // This is the fix for "pinned models do not appear in the picker". VS Code
+    // drops any pin whose id is not in the live model cache, so a
+    // workspace-derived id made every pin folder-scoped and silently dead. The
+    // cwd is carried per request (`RunRequest.cwd`), never in the id, so
+    // nothing downstream needed the salt.
     const other = '/Users/paranjay/dev/other-repo';
     for (const m of MODELS) {
-      expect(chatIdFor(m.id, other), m.id).not.toBe(chatIdFor(m.id, WS));
+      expect(chatIdFor(m.id, other), m.id).toBe(chatIdFor(m.id, WS));
+      // And with no workspace open at all, which minted a third set before.
+      expect(chatIdFor(m.id, ''), m.id).toBe(chatIdFor(m.id, WS));
     }
   });
 
@@ -248,9 +255,12 @@ describe('chatIdFor', () => {
     expect(new Set(ids).size).toBe(82);
   });
 
-  it('hashes the path and the id together, not either alone', () => {
-    // `a\0bc` and `ab\0c` must not collide, so the separator cannot be dropped.
-    expect(chatIdFor('bc', 'a')).not.toBe(chatIdFor('c', 'ab'));
+  it('cannot be made to collide by moving characters across a boundary', () => {
+    // The old scheme hashed `path\0id`; `a\0bc` and `ab\0c` had to differ, so
+    // the separator could not be dropped. The id is hashed alone now, so the
+    // load-bearing property is simply that distinct ids stay distinct.
+    expect(chatIdFor('bc')).not.toBe(chatIdFor('c'));
+    expect(chatIdFor('a')).not.toBe(chatIdFor('b'));
   });
 });
 
@@ -268,10 +278,12 @@ describe('findModelByChatId', () => {
     }
   });
 
-  it('returns undefined for a chat id minted for another workspace', () => {
+  it('resolves an id minted elsewhere, because the id is workspace-independent', () => {
     const [m] = MODELS;
     const other = '/Users/paranjay/dev/other-repo';
-    expect(findModelByChatId(chatIdFor(m.id, WS), other)).toBeUndefined();
+    // The inverse of the old behaviour, and the point of the change: a pin made
+    // in one folder resolves in another instead of dangling.
+    expect(findModelByChatId(chatIdFor(m.id, WS), other)?.id, m.id).toBe(m.id);
   });
 
   it('returns undefined for a malformed or unknown chat id', () => {

@@ -9,6 +9,9 @@ is stated.
 - **Host:** macOS/darwin arm64, node v24.13.0, `command-code@1.66.0`, VS Code 1.139.1
 - **Date:** 2026-09-28
 
+> **Addendum — 0.1.1, 2026-09-29.** §1–§10 are the original record and are left unedited, including
+> the claims that this addendum later contradicts. The defect they could not see is in §11.
+
 ## 1. `npm run check`
 
 Green from a clean tree (no `dist/`, no `node_modules/` staged, no uncommitted source).
@@ -815,3 +818,921 @@ which remains outside this diff.
   corrected with the reason recorded, and the one that surfaced a real defect (AC-17's `.vitest/`
   leak) was reported rather than patched.
 
+## 11. 0.1.1 — the extension registered no models at all
+
+### 11.1 What the earlier record got wrong
+
+§5 M1 reported:
+
+> | Provider registers under the `cmdcode` vendor | **pass** | `vendor: "cmdcode"`, `providerRegistered: true` |
+
+and §10 AC-13 reported activation passing. **Both were true of the code and false of the product.**
+The harness in §4 supplied its own `lm.registerLanguageModelChatProvider` shim, so it recorded the
+call being *made*. It never went through VS Code's own registration path, which is where the call
+was being refused. The distinction the harness could not see:
+
+- calling `registerLanguageModelChatProvider(vendor, provider)` — what the shim recorded as `true`;
+- VS Code **accepting** that vendor — which it did not.
+
+430 passing tests never covered the second one, because every layer the tests exercise stops one
+process short of it.
+
+### 11.2 Root cause, from VS Code's own source
+
+VS Code keeps an allowlist of language model vendors. Extracted from the shipped
+`workbench.desktop.main.js` (VS Code 1.139.1):
+
+```js
+registerLanguageModelProvider(o,e){
+  if(!this._vendors.has(o)) throw new Error(`Chat model provider uses UNKNOWN vendor ${o}.`);
+```
+
+`this._vendors` is populated by exactly one extension point:
+
+```js
+registerExtensionPoint({ extensionPoint:"languageModelChatProviders", jsonSchema: …,
+  activationEventsGenerator: function*(s){ for (let o of s) yield `onLanguageModelChatProvider:${o.vendor}` } })
+```
+
+`package.json` had no `contributes.languageModelChatProviders`, so `cmdcode` was never on the list.
+`src/extension.ts:117` then called `vscode.lm.registerLanguageModelChatProvider('cmdcode', …)` and
+the main process refused it.
+
+**Why it was silent.** The throw is a rejected IPC call, not a rejected `activate()`. The output
+channel logs `Cmd Code: activated` from the extension host, before the main process's rejection
+arrives. The user sees a success message and an empty picker, with no error surfaced anywhere.
+
+Observed in the real extension host log, on two consecutive window loads of 0.1.0:
+
+```
+[error] Error: Chat model provider uses UNKNOWN vendor cmdcode.
+    at IY.registerLanguageModelProvider (workbench.desktop.main.js:626:91347)
+```
+
+### 11.3 Two hypotheses that were wrong
+
+Recorded so they are not re-investigated.
+
+- **The CLI was not on the extension host's `PATH`.** A GUI-launched app on macOS inherits a
+  minimal `PATH`, and this CLI is installed under nvm, which is not in the resolver's fixed
+  npm-global list. Simulated directly: the terminal `PATH` resolves `cmd`; the GUI `PATH` does not
+  resolve anything. But the real log says `Cmd Code: CLI resolved to cmd (path)`, and the
+  capability probe passes (`cmd --help` declares `--output-format <format> … json`). Resolution was
+  never the problem.
+- **Packaging was broken.** It was not — activation ran, 82 models were built, the bundle loaded.
+
+### 11.4 The marketplace `language-models` tag
+
+The tag that makes a provider discoverable in the marketplace is **not author-declared**. It is
+assigned by the marketplace from the presence of `contributes.languageModelChatProviders`, which is
+why the missing contribution also cost the extension its discoverability. Evidence from the
+gallery API:
+
+| Extension | declares `languageModelChatProviders` | has `language-models` tag |
+|---|---|---|
+| `github.copilot-chat` | yes | yes (and has no such keyword) |
+| `kimi-lm-provider` | yes (`moonshot`) | yes, with **no `keywords` field at all** |
+| `oai2lmapi` | yes (3 vendors) | yes, with **no `keywords` field at all** |
+| `vscode-pi-model-chat-provider` | yes (`pi`) | yes, via a hand-written `language-model-provider` keyword |
+
+So the single missing contribution explains both symptoms, and the keywords added in 0.1.1 are
+belt-and-braces rather than the mechanism.
+
+### 11.5 The fix
+
+- `contributes.languageModelChatProviders`: `[{ vendor: "cmdcode", displayName: "Cmd Code" }]`.
+- `activationEvents` gains `onLanguageModelChatProvider:cmdcode`, which VS Code generates from that
+  contribution, alongside the existing `onStartupFinished`.
+- `Machine Learning` added to `categories`, matching every other language model provider.
+- `keywords` gains `language-models` and `language model provider`.
+
+### 11.6 Regression test, and proof it fails without the fix
+
+`test/scaffold.test.ts` now imports `VENDOR_ID` from `src/types.ts` and asserts the manifest
+declares it — the two string literals that were previously unconnected. Verified by reverting the
+manifest and re-running:
+
+```
+$ node -e "…delete j.contributes.languageModelChatProviders; j.activationEvents=['onStartupFinished']…"
+$ npx vitest run test/scaffold.test.ts
+ FAIL  extension manifest > contributes the vendor that VENDOR_ID registers under
+ FAIL  extension manifest > declares exactly one vendor, with a display name
+ FAIL  extension manifest > activates on the vendor event its own contribution generates
+ FAIL  extension manifest > declares the engine, entry point, activation event and license
+ Test Files  1 failed (1)      Tests  4 failed | 9 passed (13)
+```
+
+The guard is real: it fails on the pre-fix manifest and passes on the post-fix one.
+
+### 11.7 Executed verification of the fix, in a real VS Code
+
+Everything below was run, not reasoned about. The user's own window was never reloaded; each check
+used a separate `--user-data-dir`, and every instance was shut down afterwards.
+
+**Suite** — `npm run check`: both typechecks clean, **433 passed / 0 failed** (430 + 3 new).
+
+**Packaging** — 8 files, 33.62 KB. The packaged `extension/package.json` was read back out of the
+artifact and carries the contribution:
+
+```
+version: 0.1.1
+categories: ["AI","Chat","Machine Learning"]
+activationEvents: ["onStartupFinished","onLanguageModelChatProvider:cmdcode"]
+languageModelChatProviders: [{"vendor":"cmdcode","displayName":"Cmd Code"}]
+```
+
+**Registration accepted** — trace log of a real extension host with 0.1.1 installed:
+
+```
+[LM] registering language model provider cmdcode {}
+```
+
+and **zero** occurrences of `UNKNOWN vendor`, against two in the pre-fix profile.
+
+**Vendor now recognised by chat** — `renderer.log`, `[ChatModelChanged]`, before and after:
+
+```
+before (0.1.0): vendors: agent-host-copilotcli, agent-host-claude, minimax, …      ← no cmdcode
+after  (0.1.1): vendors: cmdcode, minimax, agent-host-copilotcli, agent-host-claude, hidden
+```
+
+**All 82 models enumerable** — a throwaway probe extension called `vscode.lm.selectChatModels({})`
+in a real extension host and wrote the result to disk. The probe was removed afterwards; the user's
+extensions directory was left as found.
+
+```json
+{ "totalCount": 82, "cmdcodeCount": 82, "vendors": ["cmdcode"],
+  "allCmdcIds": true, "uniqueIds": 82,
+  "sample": ["cmdc-6d25483acfdc | DeepSeek V4 Pro (latest) | family=cmdcode", …] }
+```
+
+82 models, every id `cmdc-` + 12 hex, 82 unique. This is the first executed evidence anywhere in
+this document that the models reach VS Code at all — §5 M1 could not produce it.
+
+### 11.8 Packaging defect found and fixed here
+
+The first 0.1.1 `vsce package` shipped **13 files, 42.55 KB**, including six files under
+`extension/.commandcode/taste/`. This is the same class of leak as §10.3's `.vitest/` defect — agent
+scratch reaching a published artifact — and §10.3's recommended fix was never applied. Both are now
+closed by three lines in `.vscodeignore`:
+
+```
+.commandcode/**
+.vitest/**
+```
+
+Repackaged: **8 files, 33.62 KB**, matching the 0.1.0 content set plus the fixed manifest.
+
+### 11.9 Still unverified
+
+Copilot Chat's **chat UI rendering** of these models is still unverified, for the same reason as
+§8.1: the picker and the model list are now proven to populate, but selecting a model in a live
+Copilot Chat session and reading streamed text back into the chat pane is VS Code's own code path
+and needs a signed-in interactive session. The account on this machine is also rate-limited, so a
+live turn would have failed for an unrelated reason anyway.
+
+### 11.10 Provider renamed to "Command Code", and the capability flags VS Code actually reads
+
+The provider's `displayName` changed from `Cmd Code` to `Command Code` (the vendor id stays
+`cmdcode`, so no `cmdc-` model id changes). Verified in a real extension host after reinstalling:
+
+```
+[LM] registering language model provider cmdcode {}
+[LM] Resolved language models for vendor cmdcode [{…"vendor":"cmdcode","name":"DeepSeek V4 Pro (latest)"…}]
+```
+
+zero `UNKNOWN vendor` errors, 82 models resolved.
+
+**On the "Capabilities" column in the Manage Language Models window — there isn't one.** That
+window (`workbench.editor.modelsManagement`) renders a vendor/group tree, not a table with a
+capabilities column. What it does have is a search box with typed filters, hard-coded in the
+workbench bundle:
+
+```js
+nlo={FILTER_TYPES:["@provider:","@capability:"],
+     CAPABILITIES:["@capability:tools","@capability:vision","@capability:agent"]}
+```
+
+So the capability "tags" are **search filters**, not declarations, and they cannot be set. They
+match a model's metadata through `getMatchingCapabilities`:
+
+```js
+case "tools":  e.metadata.capabilities.toolCalling === true → push("toolCalling")
+case "vision": e.metadata.capabilities.vision     === true → push("vision")
+case "agent":  e.metadata.capabilities.agentMode  === true → push("agentMode")
+```
+
+Those three properties are exactly what the ext-host derives from the two fields the stable
+`vscode` API exposes (`extensionHostProcess.js`):
+
+```js
+capabilities: a.capabilities ? {
+  vision:      a.capabilities.imageInput,
+  editTools:   a.capabilities.editTools,
+  toolCalling: !!a.capabilities.toolCalling,
+  agentMode:   !!a.capabilities.toolCalling
+} : void 0
+```
+
+Observed in this extension's own resolved metadata, which is the ground truth for why the filters
+currently match nothing:
+
+```json
+"capabilities":{"vision":false,"toolCalling":false,"agentMode":false}
+```
+
+**`toolCalling` and `agentMode` are the same field.** The stable API has no separate agent switch,
+so claiming either one claims both. All three filters are therefore unavailable to this extension
+while `src/catalog-to-chat.ts:26` declines both `imageInput` and `toolCalling` — which is the
+correct behaviour, not an oversight. Copilot does have a documented tool loop, but print mode
+returns text deltas with no channel to return a tool result on, so advertising the flag would make
+Copilot send tools the adapter drops. That trade-off is §D5 in the architecture and is asserted by
+`test/provider.test.ts`. Setting these flags would be a real feature, not a metadata edit, and it
+would have to land with a working tool-result round trip.
+
+**Pinning is not a capability.** It is per-model and user-owned (`chatModelPinned`), with the
+picker honouring `chatModelVisibility` / `chatModelPinned` for every vendor equally. Nothing in
+the extension controls it; the 82 models are pinnable today.
+
+### 11.11 0.1.2 — the models were filtered out of the picker before it rendered
+
+**Symptom.** The provider registered, all 82 models appeared in the Manage Language Models window,
+and pinning from that window worked — but Copilot Chat's model picker showed none of them, in the
+mode Copilot opens in.
+
+**Cause.** Two capabilities gates in the model filter, read from the shipped workbench (1.139.1):
+
+```js
+dZi(models, sessionType, modeKind, location):
+  modeKind === "agent"  → uZi(model)  → suitableForAgentMode(model)
+  location === "editor" → pZi(model)  → !!model.capabilities.toolCalling
+  otherwise             → no capability gate
+
+suitableForAgentMode = p => (typeof p.capabilities?.agentMode > "u" || p.capabilities.agentMode)
+                           && !!p.capabilities?.toolCalling
+```
+
+The live session state was `currentModeKind = agent`, `currentSessionType = local`
+(`renderer.log`), so the first gate applied. With `toolCalling: false` — the value
+`src/catalog-to-chat.ts` shipped in every release up to 0.1.1 — all 82 models were dropped before
+the picker rendered. The gate is `agent`-only: in an **Ask** or **Chat** session the same models
+would have been listed.
+
+**Fix.** `toolCalling: true`. `imageInput` unchanged at `false`.
+
+**Why `true` is accurate, and what it does not claim.** The Command Code CLI executes tools
+in-process and never yields for a host to run one. From `cli.mjs`:
+
+```js
+emit({type:"tool_running", toolCallId:n.id, toolName:n.name, description:r});
+const g = await execGuarded({toolUse:…});      // runs here
+emit(…{type:"tool_completed" | "tool_errored", toolCallId:n.id, toolName:n.name, …});
+```
+
+There is no `tool_call`, `tool_request` or `permission_request` emitter anywhere in the bundle, so
+the CLI cannot be driven by a host through the current print mode. The extension therefore still
+emits no `LanguageModelToolCallPart` and still ignores `options.tools`: Copilot sends no tool
+schemas, and a model's own tool work does not surface in the chat's tool UI. The flag states that
+the model can call tools, which is true; it does not claim Copilot orchestrates them. Both the
+README and the `CAPABILITIES` comment say so explicitly, replacing the old "no tool calling" claim.
+
+`imageInput` stays `false` deliberately: `buildPrompt` renders text parts only, so an image part
+would be discarded without a trace. Several catalog models are vision-capable; that is a gap in
+the adapter's prompt path, not in the models.
+
+**Executed verification** — a throwaway probe extension called `vscode.lm.selectChatModels({})`
+against the installed 0.1.2 in a real extension host (probe removed afterwards):
+
+```json
+{ "cmdcodeCount": 82,
+  "capabilities": { "supportsImageToText": false, "supportsToolCalling": true },
+  "distinctCapabilityShapes": 1 }
+```
+
+All 82 models report `supportsToolCalling: true`, against 0 in 0.1.1. Trace log confirms
+`[LM] registering language model provider cmdcode {}` from `cmdcode.cmdcode-0.1.2`, with no
+`UNKNOWN vendor`. `npm run check`: **435 passed / 0 failed**. Packaged 8 files, 34.69 KB.
+
+**Still unverified** — that a *live* Agent turn completes and streams back into the chat pane. The
+account on this machine hit its weekly limit during this work
+(`429 … Your limit resets at 2026-10-01T15:18:35Z`), so no request could be completed here. The
+picker-visibility defect is fixed and proven; end-to-end chat execution is not, for want of a usable
+quota.
+
+**Two stale claims in the earlier record**, corrected here rather than left to mislead:
+
+- §5 M1 and §10 AC-13 reported activation and registration passing. Both were true of the code and
+  false of the product for the reasons in §11.2 and §11.11 respectively.
+- §6 recorded "No tool calling — **confirmed**" and asserted every model reports
+  `{imageInput: false, toolCalling: false}`. That was correct for what shipped and is now wrong
+  for what should; the README and the tests carry the current contract.
+
+**Environment note.** The CLI on this machine is now `command-code@1.69.0`; this document records
+`1.66.0` in §1. v1.69 added `--tools-all` and `--tools-enable`, which the transport's argv
+deliberately excludes. That exclusion is a separate decision, unaffected by this fix, and is worth
+revisiting now that the flag is honest about tool support.
+
+### 11.12 The direct-API transport, researched but not adopted
+
+Scoped out of 0.1.2 at the user's direction ("make the current extension work properly first").
+Recorded because the research is done and the finding is not obvious:
+
+`https://api.commandcode.ai` is live and self-describes:
+
+```
+GET https://api.commandcode.ai/                     → 200 {"success":true,"message":"Command Code API"}
+GET https://api.commandcode.ai/alpha/generate       → 401 UNAUTHORIZED (+ docs pointer)
+GET …/v1/chat/completions  |  /v1/messages  |  /v1/responses  |  /v1/models  → 404
+```
+
+So an authenticated API surface exists under `/alpha/*`, but the OpenAI- and Anthropic-compatible
+paths this extension would want are not mounted there. Vendored endpoints in `cli.mjs` are
+`/alpha/generate`, `/alpha/agent/generate`, `/alpha/sandbox/*`, `/alpha/billing/*` and others — an
+agent-oriented surface, not a general chat-completions one. No route list is published in
+`/docs`, and `commandcode.ai/docs` documents the CLI, not an API.
+
+Next step when this is picked up: authenticate and enumerate the real `/alpha/*` routes rather than
+assuming a compatibility shim, and confirm whether a tool-result channel exists at all — without
+one, a direct transport hits the same `suitableForAgentMode` ceiling.
+
+### 11.13 0.1.3 — the "Working…" placeholder was being sent as answer content
+
+**Symptom, reported by the user after 0.1.2 was confirmed working end to end:**
+
+```
+Working…Hello! I'm working in the `cmdcode-vsc` VS Code extension project. How can I help you today?
+```
+
+Every reply in every session carried the prefix.
+
+**Cause.** `src/chat-provider.ts` reported a `LanguageModelTextPart('Working…')`
+before spawning the CLI, to cover the ~3–4 s cold start. The original comment
+claimed *"VS Code has no retract API, so this stays in the transcript"* — which
+identifies the bug as the design rather than denying it. Every part handed to
+`progress` becomes response **content**; there is no separate status channel, so
+a placeholder emitted as a text part is indistinguishable from model output and
+is prepended to it forever.
+
+**Why it cannot be reworded or re-typed.** The stable API has no non-content channel:
+
+```ts
+export type LanguageModelResponsePart =
+  | LanguageModelTextPart | LanguageModelToolResultPart | LanguageModelToolCallPart;
+```
+
+All three are content. `ProvideLanguageModelChatResponseOptions` exposes only
+`modelOptions`, `tools` and `toolMode` — no `progress` handle, and `vscode.Progress`
+is not passed to a provider. The workbench offers no `thinkingDelta` /
+`thinking_delta` part type either (0 occurrences in `workbench.desktop.main.js`).
+So any pre-answer text the extension emits is, by construction, part of the answer.
+
+**Fix.** The placeholder is removed, not restyled. `cmdcode.showThinkingPlaceholder`
+is deleted from the manifest, `CmdCodeConfig`, `CONFIG_DEFAULTS` and the README —
+it only ever controlled whether a fabricated token was prepended, so leaving it as
+a no-op would be worse than removing it. Copilot renders its own pending state
+while a provider is awaited, so the wait is still visibly busy.
+
+The working reference provider emits no placeholder either; it streams nothing
+until the model's first delta (`minimax-provider/src/MiniMaxProvider.ts`).
+
+**Tests now assert the absence**, so "helpful" status text cannot be
+reintroduced:
+
+| Test | Asserts |
+|---|---|
+| `reports nothing before the model produces its first token` | first part is the model's own text; no match for `/working\|thinking\|please wait\|\.\.\./i` |
+| `emits no fabricated content at all when the model says nothing` | a silent run yields exactly one part, the explanation |
+| `emits exactly one explanatory part when both the deltas and the text are empty` | `toHaveLength(1)`, not 2 |
+| `forwards each delta as its own part` | `['a', 'b\n']`, no leading token |
+| `streams every text_delta in arrival order` | `['Hello', ', ', 'world']`, 3 parts not 4 |
+
+The two zero-delta tests previously asserted `toHaveLength(2)` — placeholder plus
+explanation. Both corrected to 1; a failing run here caught them rather than the
+change going unnoticed.
+
+`npm run check`: **436 passed / 0 failed**. Packaged 8 files.
+
+### 11.14 0.2.0 — marketplace identity, icon, and README
+
+**Identity.** The extension moved from `cmdcode.cmdcode` to
+`devparanjay.command-code-provider`, with the display name `Command Code Provider`. This is a new
+marketplace identity: VS Code treats it as an unrelated extension, so existing installs are not
+upgraded and must be reinstalled. Verified by installing the artifact and reading
+`code --list-extensions`, which now reports `devparanjay.command-code-provider` and nothing else
+after the old id was removed.
+
+Three names are now deliberately distinct, and a new test pins the split:
+
+| Name | Value | Changes when? |
+| --- | --- | --- |
+| Marketplace id | `devparanjay.command-code-provider` | freely — it is packaging metadata |
+| Provider vendor id | `cmdcode` (`VENDOR_ID`) | **never** — it is hashed into every `cmdc-` model id |
+| Settings / commands | `cmdcode.*` | **never** — users' `settings.json` and keybindings depend on it |
+
+The settings namespace is independent of the publisher, so renaming it would have silently reset
+every user's configuration. `keeps the cmdcode.* settings and command namespace` asserts this so a
+future rename cannot quietly break it.
+
+**Icon.** Built from the vendor's own `symbol.svg`
+(`https://raw.githubusercontent.com/CommandCodeAI/command-code/…/symbols/symbol.svg`, referenced
+from <https://commandcode.ai/brand>) with a `PROVIDER` caption strip added beneath the mark.
+
+Worth recording: the first attempt hand-transcribed the SVG paths into a pixel buffer and produced
+a broken mark — a black square with no glyph and a scrambled caption. Two real problems, both caught
+by looking at the output image rather than by the script:
+
+1. The glyph paths are `M … v … h … z` **curve** subpaths, not the rectangles the transcription
+   assumed, so nothing was drawn.
+2. The banner font was a hand-rolled 5×7 bitmap whose column bytes were indexed in the wrong
+   direction, rendering the word backwards and overlapping.
+
+`scripts/make_icon.py` now rasterises the vendor SVG with `rsvg-convert` and renders the caption
+with a real system font via Pillow, so neither the mark nor the text is re-implemented. The
+128×128 result was inspected at 128, 64, 32 and 16 px: the mark stays legible at 16 px and
+`PROVIDER` is still readable. The old `scripts/make-icon.mjs` (unrelated placeholder artwork, which
+documented itself as *not* the vendor mark) is deleted.
+
+**Branding consistency.** Command titles, the output channel, and the log prefix moved from
+`Cmd Code` to `Command Code`; command **ids** did not. Verified in a live extension host:
+
+```
+[info] Command Code: activating (logLevel=normal, models=82)
+[info] Command Code: CLI resolved to cmd (path)
+[info] Command Code: activated
+[LM] registering language model provider cmdcode {}      ← 0 UNKNOWN vendor
+```
+
+**README** rewritten for the Marketplace and GitHub, including a Trademarks and affiliation section
+and a license/warranty section. Its factual claims were checked against the code rather than
+written from memory: command titles and ids, the five settings and their defaults, the log lines
+quoted in the troubleshooting table, the 82-model count, and the CLI version (1.69.0). Two claims
+were corrected as a result — the command titles in the draft said "Command Code:" while the manifest
+still said "Cmd Code:", and the log examples quoted the old prefix.
+
+`npm run check`: **437 passed / 0 failed**. Packaged 8 files, 46.11 KB. `scripts/**` is in
+`.vscodeignore`, so the generator and the vendored `symbol.svg` stay out of the artifact — confirmed
+by reading the file list back out of the `.vsix`.
+
+
+
+
+
+
+
+### 11.15 0.3.0 — vision on both providers, and a real tool loop
+
+**The base URL was wrong, and that was the whole blocker.** Earlier probes found
+`api.commandcode.ai/v1/chat/completions` → 404 and concluded the API was agent-shaped
+under `/alpha/*`. Both were true and irrelevant: the documented routes live under
+**`/provider`**, and the host root serves the CLI's own private backend, which is a
+different surface. `https://api.commandcode.ai/provider/v1/chat/completions` is the
+route. Recorded because "the documented endpoint 404s" led to three wrong conclusions here.
+
+**Per-model capabilities come from the CLI's own catalog, not prose.** A first draft
+proposed regexing the "Best for" blurb; the vendor's code disproves it in both directions —
+`deepseek/deepseek-v4.1-flash` says "with vision" and is vision-capable, while
+`deepseek/deepseek-v4-pro` says nothing and is text-only. The CLI instead ships a static
+catalog of 90 entries with `inputModalities: ["text"|"text","image"]`, and branches on it
+via `modelSupportsVision`. `scripts/sync-capabilities.mjs` reads that and reports drift.
+Result: **62 vision, 20 text-only** across the 82 shipped models. The extractor initially
+missed `xai/grok-4.7` because it is the last entry and ends `}}` rather than `id:"` — caught
+by the cross-check, not by the count.
+
+**The two documented tool constraints are correctness, not polish.** Both fail a request
+outright, so both are handled before sending:
+- remote `mcp` tools → rewritten to `type: "function"` (the upstream would otherwise dial the
+  user's server on Command Code's credential);
+- under `x-cmd-zdr: 1` the array is filtered to `function`/`custom`/`local_shell`.
+
+A test caught a real bug here: the ZDR check originally ran on the *declared* type, so an
+`mcp` tool was dropped even though the rewrite makes it an ordinary `function` and therefore
+ZDR-safe. Fixed to test the post-rewrite type for `mcp` and the declared type otherwise.
+
+**Executed verification.** A throwaway probe called `vscode.lm.selectChatModels({})` against
+installed 0.3.0 in a real extension host (probe removed afterwards):
+
+```json
+{ "vendors": ["cmdcode", "cmdcode-api"],
+  "cmdcode":     { "total": 82, "vision": 62, "tools": 0 },
+  "cmdcode-api": { "total": 82, "vision": 62, "tools": 82 } }
+```
+
+Vision is mixed and correct in both groups — "DeepSeek V4.1 Flash" vision-capable, "DeepSeek
+V4 Pro" not. `toolCalling` is 0 on the CLI group and 82 on the API group, which is the
+per-provider split the plan called for. Both vendors register with 0 `UNKNOWN vendor`.
+
+`npm run check`: **487 passed / 0 failed** (471 + 16 new). Packaged 8 files, 56.71 KB — the
+first 0.3.0 build swept `.github/ISSUE_TEMPLATE/**` into the VSIX (10 files), now excluded.
+
+**Not verified, and stated plainly:**
+
+- **No live API request.** There is no API key in this environment, so every fact about
+  `/provider` comes from the published documentation. URLs, headers, bodies, SSE parsing and
+  error mapping are covered by unit tests and recorded fixtures; the end-to-end round trip is
+  unverified until a key is supplied.
+- **No live image read.** The account is rate-limited (`429`, resets 1 Oct). The wiring is
+  verified — staged file, prompt marker, `--config imageVisionEnabled=true`, and the data-URL
+  content block — but not the model's answer.
+- **https://commandcode.ai/models** could not be fetched (the 429 also gates web tools), so
+  the CAPS column there is unconfirmed. The CLI catalog is the source until the site is
+  reachable, and reconciling the two is exactly what the new issue template is for.
+
+### 11.16 0.3.1 — three defects reported against 0.3.0
+
+**1. `Model "…" is not available on this endpoint`.** The route rule was
+"Claude ⇒ `/messages`, else `/responses`". The API serves **three** route sets, and
+`GET /provider/v1/models` — public, no auth — says which is which:
+
+```
+/chat/completions,/responses   67
+/messages                      10
+/chat/completions               9   ← these 400 on /responses
+```
+
+The 9 include `stealth/space-bunny-alpha`, the model in the report. Routing now reads a
+generated table (`src/api/endpoints.ts`, refreshed by `scripts/sync-endpoints.mjs`), and
+`/chat/completions` got a request builder because its dialect differs structurally: images are
+`image_url` parts, and a tool result is its own `role: "tool"` message rather than a block inside
+the next turn.
+
+**The generator caught four errors in my own hand-built table.** I wrote it from the prose rule
+before writing the script; running the script diffed my version against the server and found four
+newer Claude models I had misrouted. Had I shipped the hand-built table, four models would have
+failed the same way. Verified all 82 rows against the live list:
+
+```
+ALL 82 MODELS MATCH THE LIVE SERVER
+```
+
+**2. Pinned CLI models did not appear.** Two independent causes:
+
+- The CLI group advertised `toolCalling: false`, and VS Code's Agent filter is
+  `uZi(m, kind) = kind === "agent" ? suitableForAgentMode(m) : true` — so in Agent mode a pin had
+  nothing to resolve into. Now `true` on both groups.
+- Deeper: ids were `sha256(workspacePath + "\0" + modelId)`, so they changed with the folder, and
+  `getPinnedModelIds()` filters on `this._modelCache.has(o)`. A pin made in one window was
+  therefore dead in the next, with no error anywhere. The saved pin list confirmed it — three
+  distinct id sets had accumulated, one per workspace including the empty one:
+
+      cmdc-1ee444ab4e33  → resolves only for the EMPTY workspace   (stale)
+      cmdc-40d2ba29729b  → resolves for /Users/paranjay/dev/cmdcode-vsc
+      cmdcode-api/cmdc-40d2ba29729b  → same model, API group, resolved fine
+
+  The API group pinned correctly *because* it shares the same id function and the pin was fresh —
+  which is what pointed at the id scheme rather than at pinning itself. Ids are now
+  `sha256(modelId)`. The per-folder isolation the salt bought was never real: the cwd travels per
+  request (`RunRequest.cwd`), so nothing downstream depended on the hash.
+
+**3. The details-tab icon.** The README's `<img src="media/icon.png">` was a relative path, which
+resolves against the *installed* extension directory rather than the repository, so it 404s in the
+webview. The working reference extension's README contains no `<img>` tag at all — the tab icon
+comes from the manifest, which was always correct. The tag is removed; the packaged icon is a
+valid 128×128 RGBA PNG declared as a `Microsoft.VisualStudio.Services.Icons.Default` asset.
+
+**Executed verification** against installed 0.3.1, real extension host:
+
+```json
+{ "vendors": ["cmdcode", "cmdcode-api"],
+  "cmdcode":     { "total": 82, "tools": 82, "vision": 62 },
+  "cmdcode-api": { "total": 82, "tools": 82, "vision": 62 },
+  "idsUnique": 82 }
+```
+
+`tools: 82` on the CLI group is the pinning fix; ids are now one per model regardless of folder.
+492 passed / 0 failed.
+
+**One repair worth recording:** while removing a stray NUL byte from
+`test/model_selection_prompt_cache.test.ts` I also deleted the NUL that the byte was a *fixture*
+for — a test asserting that a NUL cannot survive an argv element. The suite caught it
+immediately and the fixture is restored as an escape, `\u0000`, which is better style than a raw
+byte in a source file.
+
+### 11.17 0.3.2 — every API message failed: flat tool definitions
+
+**Symptom.** Every message on the API group returned `Invalid input: expected object,
+received undefined`, from Zod validation before any model work.
+
+**Cause.** `convertTools` produced a **flat** tool definition:
+
+```ts
+{ type: 'function', name, description, parameters }     // ← sent
+```
+
+while the schema wants the nested form:
+
+```ts
+{ type: 'function', function: { name, description, parameters } }
+```
+
+A flat object serialises with **no `function` key at all**, which the server reads as `undefined`
+— precisely the error. The inconsistency was visible in the same file: tool *calls* were already
+built nested (`function: { name, arguments }`), only the *definitions* were not.
+
+Two further defects in the same area, both fixed:
+
+- **`/messages` takes Anthropic's tool shape**, which is flat with `input_schema` — not OpenAI's
+  nested form. One converted shape was being sent to all three routes, so the 10 Claude models
+  would have been served a shape they cannot read.
+- **`tools: []` was always sent**, even when VS Code supplied no tools. Every documented example
+  omits the key entirely, and an empty array is the likeliest trigger for a schema that expects at
+  least one entry. It is now omitted when empty.
+
+**Why it was not caught before.** Every earlier test asserted the *converted object* or the
+*SSE frames*, never the **serialised request body**. A shape error in the body is invisible to
+both. `test/api-request-body.test.ts` now captures the exact JSON the provider puts on the wire
+for all three routes and asserts the tool shape, the URL, and that no field is `undefined`.
+Reverting the definition to flat fails **8** of its assertions, so the regression cannot pass
+silently again.
+
+The same work surfaced a **stub gap**: `LanguageModelToolCallPart` and `LanguageModelToolResultPart`
+were absent from the `vscode` test stub, so the provider's `instanceof` narrowing threw "Right-hand
+side of 'instanceof' is not an object". Both classes are now declared, with a comment saying they
+exist for that narrowing path.
+
+`npm run check`: **501 passed / 0 failed**. The shipped bundle was checked after packaging: the
+nested definition and `input_schema` are present and the flat shape is gone.
+
+**Still unverified:** a live request. No API key is available in this environment, so the wire
+format is verified by construction and by unit tests against a captured body, not by a real round
+trip. That is the gap that let this ship, and it closes the moment a key is supplied.
+
+### 11.18 0.3.3 — the per-dialect text block type
+
+**Symptom.** Every API message returned `Invalid input: expected string, received undefined`,
+including plain text-only chat.
+
+**Diagnosis came from the log, not a guess.** 0.3.2 logs the route *before* each request, so the
+two live log files answered it immediately:
+
+```
+api: POST /provider/v1/chat/completions model=stealth/space-bunny-alpha        tools=96 zdr=true
+api: POST /provider/v1/chat/completions model=stealth/space-bunny-alpha        tools=0  zdr=true
+api: POST /provider/v1/responses        model=poolside/laguna-s-2.1-free       tools=0  zdr=true
+```
+
+`tools=0` rules out the tool definition shape, and three routes are implicated — so the defect was
+in the **common text path**, not in images or tools.
+
+**Cause.** The text block's `type` is per-dialect:
+
+| Route | Text block |
+| --- | --- |
+| `/responses` | `{ type: "input_text", text }` |
+| `/chat/completions` | `{ type: "text", text }` |
+| `/messages` | `{ type: "text", text }` |
+
+The extension sent `text` to all three. `/responses` then looks for a string on an item whose type
+it does not recognise, and answers "expected string, received undefined" — every message.
+
+**Two more shape defects in the same pass**, both invisible until asserted:
+
+- **`input_image`** takes `image_url` as a bare **string** and requires `detail`. The extension sent
+  `{ image_url: { url } }`, which is exactly the `/chat/completions` shape — and `/responses` is the
+  one route it is not.
+- **Tool parts were emitted as content blocks on every dialect.** Anthropic wants `tool_use` /
+  `tool_result` inside the message content; Responses wants `function_call` /
+  `function_call_output` as **top-level** siblings of the message; Chat Completions wants the result
+  as its own `role: "tool"` message. One placement cannot serve three routes.
+
+**A test bug that had been hiding the image bugs.** `LanguageModelDataPart` in the `vscode` stub
+exposed its bytes as `value`, while the product matches data parts *structurally* on a `data` field:
+
+```ts
+typeof record.mimeType === 'string' && record.data instanceof Uint8Array
+```
+
+So every image assertion was evaluating against an **empty content array**. Had those tests only
+checked "a request was made", they would have passed while the image path was broken — precisely the
+failure mode that let 0.3.1 and 0.3.2 ship. The stub now exposes `data`, and the image tests assert
+real content.
+
+**Executed verification.** `test/api-request-body.test.ts` asserts, per route: the text block type,
+the image shape, the tool placement, and that the prompt text is present. Reverting only the text
+type to `text` — a one-token change reproducing the reported failure — fails a test, verified.
+
+`npm run check`: **507 passed / 0 failed**.
+
+**The honest summary of 0.3.1 → 0.3.3.** Three releases, three schema defects, one root cause: I
+implemented the three wire formats from their *names* rather than their specs, and tested the
+converted objects rather than the bytes. Each defect was real and each is now guarded by an
+assertion on the serialised body. What remains unverified is still the same thing — no API key in
+this environment, so no live round trip — and that gap is what let all three through.
+
+### 11.19 0.3.4 — stop hand-writing a third dialect, and copy the reference's shape
+
+**The instruction to study the reference was the right one.** Reading
+`devparanjay/minimax-provider-vscode` end to end produced a finding no amount of
+documentation-reading had:
+
+**It never uses `/responses`.** Its entire request surface is two dialects —
+`/chat/completions` and `/messages` — and each is serialised by the vendor SDK
+(`openai`, `@anthropic-ai/sdk`), not by hand. So there is no hand-written content
+vocabulary anywhere in it.
+
+This extension did the opposite: it hand-built three dialects, including
+`/responses`, and shipped three schema defects in three releases — flat tool
+definitions (0.3.1), `text` instead of `input_text`, and `{ image_url: { url } }`
+where a bare string was required (0.3.2, 0.3.3). All three were in the path that
+a single `type` switch was meant to cover, and a single switch is exactly the
+shape that cannot express three different content vocabularies correctly.
+
+**Fix: prefer the dialect that is verifiable.** `/chat/completions` is now the
+route for any model that declares it, which is every model declaring
+`/responses` too:
+
+```
+route distribution for our 82 models:
+   /chat/completions  73
+   /messages           9
+   /responses          0   ← fallback only
+```
+
+Coverage is unchanged, because every model that declares `/responses` also
+declares `/chat/completions`. The third dialect survives only as a fallback for a
+model that declares it alone.
+
+**The Chat Completions body now matches the reference exactly**, which is the
+part worth having:
+
+| | Reference | This extension, now |
+| --- | --- | --- |
+| Text-only message | `content: "<joined text>"` (a string) | same |
+| Text + image | `content: [{type:'text'…},{type:'image_url'…}]` | same |
+| Tool call | `tool_calls: [{id, type:'function', function:{name, arguments}}]` | same |
+| Tool result | its own message, `role:'tool'`, `tool_call_id` | same |
+| Tool definition | `{type:'function', function:{name, description, parameters}}` | same |
+| No tools | `undefined` — omitted entirely | same |
+| Empty parts | a `{type:'text', text:''}` block is substituted | same |
+
+That last row is the reference's own guard, and the omission of this extension
+is why an empty `content` array could reach the server at all.
+
+Verified by capturing the wire body and comparing field by field;
+`npm run check` **510 passed / 0 failed**.
+
+**Still unverified, unchanged and unavoidable here:** no live request. Not having
+the key was the right call on your part, and the correct response was to remove
+the code I could not verify rather than to keep guessing. Two of the three
+releases in this sequence failed on shapes that the reference — which uses two
+SDK-serialised dialects — cannot get wrong.
+
+### 11.20 0.3.5 — a successful turn was rejected by my own completion check
+
+**Symptom.** The model answered — the text is in the transcript, fully rendered —
+and the turn *still* failed with `Command Code API stream ended before a completion
+event. The first request that has ever actually reached a model.
+
+**Cause.** `readStream` required a terminal frame before accepting a turn:
+
+```ts
+if (!completed) throw new StreamIncompleteError(true);
+```
+
+and the only pattern that set `completed` for `/chat/completions` was a chunk with
+an **empty `choices` array carrying `usage`**. That shape was inferred from the
+prose — "Chat Completions clients see a final `usage` chunk" — and it is not what
+this server sends. A Chat Completions stream signals completion with
+`finish_reason` on an ordinary final chunk, which is not a distinct event at all.
+
+So the reader consumed a complete, correct answer, forwarded every token, and then
+threw because the last chunk matched no pattern I had guessed. The failure was
+manufactured locally, not received from the server.
+
+**Fix, and the reference that settled it.** The working reference provider for this
+same API makes no terminal assertion at all:
+
+```ts
+for await (const chunk of stream) { … }   // no finish_reason check, no completion event
+```
+
+It consumes the stream and returns when it ends. Completion is now the stream
+ending, for every dialect. The only failure reported is a stream that produced **no
+frames at all** — nothing to show the user — and a truncated one surfaces as the
+truthful "returned no content" rather than a fabricated protocol error. The
+`isTerminal` helper was removed rather than left as dead code, so the guessed
+pattern cannot creep back in.
+
+Two tests encode the contract: a stream that ends with no `finish_reason` and no
+usage chunk **resolves** and its tokens are delivered; a stream with no frames at
+all still throws.
+
+`npm run check`: **511 passed / 0 failed**.
+
+**The pattern across 0.3.1–0.3.5, stated once.** Five releases, five defects, and
+every one was a shape I had inferred from documentation or from a route name rather
+than observed on the wire. The reference provider avoids the whole class: it uses
+two dialects, SDK-serialised, and asserts nothing about stream shape. That is the
+lesson, and the code now follows it rather than my own reading of a paragraph.
+
+> The sections above are preserved **exactly as written**, including the claims
+> §11.21 contradicts. §11.20's closing claim — that the reader "asserts nothing
+> about stream shape" — is true of stream *completion* and was false of tool calls,
+> which the same reader was still asserting the shape of. Nothing above has been
+> edited to accommodate the correction.
+
+### 11.21 0.3.6 — every tool call arrived with no arguments, and success was reported as failure
+
+**Symptom.** A browser question — "what's the text inside the logo on this page?" —
+produced this transcript, reported verbatim:
+
+```
+I'll take a look at the page.
+Command Code returned no content. See the Command Code log.
+Command Code returned no content. See the Command Code log.
+Let me retry with the page ID properly included.
+Command Code returned no content. See the Command Code log.
+I keep failing to pass the required parameter. Let me try a different tool.
+The Playwright integration is disabled. Let me try the page snapshot with the page ID.
+Command Code returned no content. See the Command Code log.
+Let me load the browser tooling properly.
+Browser tools are now available. Let me inspect the page.
+```
+
+This is **three defects**, and the transcript is the proof of all three at once:
+the model was calling tools it could not satisfy, it was being told it had
+produced nothing, and it kept going anyway.
+
+**Defect 1 — arguments discarded (Chat Completions).** `decodeChatCompletions`
+emitted on the first delta and read `arguments` from that same frame:
+
+```ts
+if (typeof name === 'string' && typeof id === 'string') {
+  handlers.onToolCall({ callId: id, name, input: safeParse(rawArgs) });
+}
+```
+
+A streamed call sends `id` and `name` **once**, on the first delta, where
+`arguments` is `""`. The real arguments arrive as fragments across every following
+delta. Reproduced against a realistic stream:
+
+```
+{ "callId": "call_abc123",
+  "name": "playwright_browser_navigate",
+  "input": { "raw": "" } }
+```
+
+That is the model's "I keep failing to pass the required parameter" — it genuinely
+had no `pageId` and no `url`, and nothing in the stream ever told it why.
+
+**Defect 2 — arguments discarded (Anthropic), unconditionally.** Worse, because
+there was no correct path at all. The call fired at `content_block_start`, where
+Anthropic always sends `input: {}`, and `input_json_delta.partial_json` was never
+read. Every Claude tool call arrived empty.
+
+**Defect 3 — the injected sentence is the loop's fuel.** `sawText` was set only by
+`onText`, so a tool-only turn left it false and the provider appended its own
+diagnostic to the response. Reported parts are response *content*: VS Code
+concatenates them into the answer with no retract and sends them back next turn as
+the model's own prior output. So the model read "returned no content" as something
+**it** had said, and concluded its call had failed — retrying, narrating, and
+repeating. This is the §11.13 output-integrity rule recurring in a second form: a
+diagnostic written into the content stream is indistinguishable from the model's
+words and permanent.
+
+**Why the tests missed all three.** The one test covering split arguments asserted
+the tool's **name**:
+
+```ts
+expect(c.tools[0].name).toBe('ls');   // passed while every argument was dropped
+```
+
+A reader that discarded the entire payload satisfied it. It now asserts the
+reassembled object. The Anthropic test asserted a hand-written non-streaming
+shape (`input` inline on the start frame) — a shape this server never sends in
+streaming mode — so it passed while the streaming path was empty.
+
+**Fix.** Calls accumulate per `index` (Chat Completions) and per block index
+(Anthropic) in a per-stream `ToolCallSink`, and are emitted at `finish_reason` /
+`content_block_stop`. Anything buffered when the stream ends is drained rather than
+dropped, consistent with §11.20's rule that the stream ending is a complete turn.
+The junk guard became `!sawText && !sawToolCall`.
+
+**Verification, by mutation rather than by assertion.** Each fix was reverted to
+its original behaviour and the suite re-run:
+
+| Fix | Behaviour restored | Assertions that fail |
+|-----|--------------------|-----------------------|
+| Chat Completions buffering | emit per delta | 3 |
+| Anthropic accumulation | emit at `content_block_start` | 4 |
+| Junk guard | `!sawText` only | 1 |
+
+`npm run check`: **520 passed / 0 failed**.
+
+**The harness is the third defect, and it is the one that cost the most.** The
+fixtures were hand-escaped SSE literals, and an argument fragment is JSON nested
+inside a JSON string — two levels of escaping. A mistyped comma produces a frame
+the reader *silently discards*, which is indistinguishable from a decoder bug. I
+hit that three times while writing these tests and misread it as a source defect
+twice. Every new fixture is now built with `JSON.stringify`, so a fragment cannot
+be mistyped. The lesson generalises: a test harness that can silently discard the
+input it is meant to carry will be debugged as if it were the code under test.
+
+**The pattern across 0.3.1–0.3.6, extended.** The five earlier releases each
+inferred a *request* shape from prose. This one inferred a *response* shape the
+same way — from what a frame carrying `name` "should" contain — and got it wrong
+in the direction that looked like success. Both halves of the lesson are the same
+one: read the wire, not the documentation. The difference is that a wrong request
+shape fails loudly and immediately, while a wrong response shape fails *quietly and
+silently* — the model is handed an empty object, believes it, and acts on it. That
+is strictly worse, and it is why the response path needed observation rather than
+inference in the first place.
