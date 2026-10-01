@@ -243,16 +243,94 @@ describe('readStream — Anthropic dialect', () => {
   });
 
   it('emits a tool_use block as a tool call', async () => {
+    // Anthropic also allows the whole input on the start frame, with no
+    // fragments following. That path still has to work.
     const c = collector();
     await readStream(
       sse(
-        'data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tu_1","name":"grep","input":{"q":"x"}}}',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"grep","input":{"q":"x"}}}',
         'data: {"type":"message_stop"}',
       ),
       'anthropic',
       c.handlers,
     );
     expect(c.tools).toEqual([{ callId: 'tu_1', name: 'grep', input: { q: 'x' } }]);
+  });
+
+  it('accumulates input_json_delta fragments into the tool input', async () => {
+    // The real Claude shape: the start frame carries input:{} and the arguments
+    // stream afterwards. Emitting at the start frame delivers an empty object,
+    // so the model calls the tool with nothing in it.
+    const fragments = ['{"page', 'Id":"3"', '}'];
+    const c = collector();
+    await readStream(
+      sse(
+        `data: ${JSON.stringify({
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_page', input: {} },
+        })}`,
+        ...fragments.map((f) =>
+          `data: ${JSON.stringify({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: f },
+          })}`,
+        ),
+        `data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}`,
+        'data: {"type":"message_delta","usage":{"output_tokens":5}}',
+        'data: {"type":"message_stop"}',
+      ),
+      'anthropic',
+      c.handlers,
+    );
+    expect(c.tools).toEqual([{ callId: 'toolu_1', name: 'get_page', input: { pageId: '3' } }]);
+  });
+
+  it('still emits an Anthropic call when message_stop arrives without a block stop', async () => {
+    const c = collector();
+    await readStream(
+      sse(
+        `data: ${JSON.stringify({
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_2', name: 'ls', input: {} },
+        })}`,
+        `data: ${JSON.stringify({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"p":"src"}' },
+        })}`,
+        'data: {"type":"message_stop"}',
+      ),
+      'anthropic',
+      c.handlers,
+    );
+    expect(c.tools).toEqual([{ callId: 'toolu_2', name: 'ls', input: { p: 'src' } }]);
+  });
+
+  it('prefers streamed fragments over a non-streaming input placeholder', async () => {
+    // A server that sends `input: {}` on the start frame and the real arguments
+    // afterwards must not be overridden by that empty placeholder.
+    const c = collector();
+    await readStream(
+      sse(
+        `data: ${JSON.stringify({
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_3', name: 'ls', input: {} },
+        })}`,
+        `data: ${JSON.stringify({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"p":"src"}' },
+        })}`,
+        `data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}`,
+      ),
+      'anthropic',
+      c.handlers,
+    );
+    expect(c.tools[0].input).toEqual({ p: 'src' });
   });
 });
 

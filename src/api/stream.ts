@@ -65,6 +65,8 @@ interface PendingToolCall {
   callId?: string;
   name?: string;
   args: string;
+  /** Anthropic's non-streaming shape: the whole input on the start frame. */
+  inlineInput?: unknown;
 }
 
 /** A completed call, as handed to the host. */
@@ -141,53 +143,87 @@ function decodeChatCompletions(
 }
 
 /**
- * Accumulator for Chat Completions tool calls that span many frames.
+ * Accumulator for tool calls that span many frames, on either dialect.
  *
  * One instance lives per `readStream` call, so two concurrent requests never
  * share half-assembled calls.
  */
 class ToolCallSink {
   private readonly chatCompletionsCalls = new Map<number, PendingToolCall>();
+  private readonly anthropicCalls = new Map<number, PendingToolCall>();
 
   /** The (possibly still empty) accumulator for a streamed call at `index`. */
   chatCompletions(index: number): PendingToolCall {
-    let entry = this.chatCompletionsCalls.get(index);
+    return this.entry(this.chatCompletionsCalls, index);
+  }
+
+  /** The accumulator for an Anthropic `tool_use` block at `index`. */
+  anthropic(index: number): PendingToolCall {
+    return this.entry(this.anthropicCalls, index);
+  }
+
+  private entry(store: Map<number, PendingToolCall>, index: number): PendingToolCall {
+    let entry = store.get(index);
     if (entry === undefined) {
       entry = { args: '' };
-      this.chatCompletionsCalls.set(index, entry);
+      store.set(index, entry);
     }
     return entry;
   }
 
   /**
-   * Emit every complete call, in index order, and clear the accumulator.
+   * Turn a finished accumulator into a call, or null when it is unusable.
    *
-   * A call missing a name or an id was never fully described, so it is dropped
-   * rather than handed to the host half-formed — Copilot would fail a call the
-   * user never asked for.
+   * The accumulated argument string wins over any inline input: fragments exist
+   * precisely because the server is streaming them. A call missing a name or an
+   * id was never fully described, so it is dropped rather than handed to the host
+   * half-formed — Copilot would fail a call the user never asked for.
    */
-  flushChatCompletions(): CompletedToolCall[] {
-    const out: CompletedToolCall[] = [];
-    for (const index of [...this.chatCompletionsCalls.keys()].sort((a, b) => a - b)) {
-      const entry = this.chatCompletionsCalls.get(index);
-      this.chatCompletionsCalls.delete(index);
-      if (entry === undefined || typeof entry.name !== 'string' || typeof entry.callId !== 'string') {
-        continue;
-      }
-      out.push({ callId: entry.callId, name: entry.name, input: safeParse(entry.args) });
+  private complete(entry: PendingToolCall | undefined): CompletedToolCall | null {
+    if (entry === undefined || typeof entry.name !== 'string' || typeof entry.callId !== 'string') {
+      return null;
     }
-    return out;
+    return {
+      callId: entry.callId,
+      name: entry.name,
+      input: entry.args.length > 0 ? safeParse(entry.args) : entry.inlineInput ?? {},
+    };
+  }
+
+  /** Emit every complete Chat Completions call, in index order, and clear them. */
+  flushChatCompletions(): CompletedToolCall[] {
+    return this.flush(this.chatCompletionsCalls);
+  }
+
+  /** Emit the Anthropic call for one closed block, if it is usable. */
+  flushAnthropic(index: number): CompletedToolCall | null {
+    const entry = this.anthropicCalls.get(index);
+    this.anthropicCalls.delete(index);
+    return this.complete(entry);
   }
 
   /**
-   * Calls still buffered when the stream ended with no `finish_reason`.
+   * Calls still buffered when the stream ended with no completion signal.
    *
    * The stream ending is a complete turn (see readStream), so a call the server
-   * finished describing but never flagged is still the model's real intent and
-   * must not be dropped.
+   * finished describing but never flagged — no `finish_reason`, no
+   * `content_block_stop` — is still the model's real intent and must not be
+   * dropped.
    */
   drain(): CompletedToolCall[] {
-    return this.flushChatCompletions();
+    return [...this.flushChatCompletions(), ...this.flush(this.anthropicCalls)];
+  }
+
+  private flush(store: Map<number, PendingToolCall>): CompletedToolCall[] {
+    const out: CompletedToolCall[] = [];
+    for (const index of [...store.keys()].sort((a, b) => a - b)) {
+      const call = this.complete(store.get(index));
+      store.delete(index);
+      if (call !== null) {
+        out.push(call);
+      }
+    }
+    return out;
   }
 }
 
@@ -225,8 +261,17 @@ function decodeResponses(frame: Frame, handlers: StreamHandlers): boolean {
   return saw;
 }
 
-/** Anthropic Messages: content_block_delta with text_delta / input_json_delta. */
-function decodeAnthropic(frame: Frame, handlers: StreamHandlers): boolean {
+/**
+ * Anthropic Messages: content_block_delta with text_delta / input_json_delta.
+ *
+ * A `tool_use` block is split the same way a Chat Completions call is. The
+ * `content_block_start` frame carries `id` and `name` with `input: {}`, and the
+ * arguments stream afterwards as `input_json_delta.partial_json` fragments.
+ * Emitting the call at the start frame — which is what this did — delivers an
+ * empty object for every Claude tool call, so the model called the tool with
+ * nothing in it.
+ */
+function decodeAnthropic(frame: Frame, handlers: StreamHandlers, pending: ToolCallSink): boolean {
   const type = frame['type'];
   let saw = false;
 
@@ -237,6 +282,10 @@ function decodeAnthropic(frame: Frame, handlers: StreamHandlers): boolean {
       handlers.onText(text);
       saw = true;
     }
+    const partial = delta?.['partial_json'];
+    if (typeof partial === 'string' && partial.length > 0) {
+      pending.anthropic(blockIndex(frame)).args += partial;
+    }
     return saw;
   }
 
@@ -245,15 +294,39 @@ function decodeAnthropic(frame: Frame, handlers: StreamHandlers): boolean {
     if (block !== null && block['type'] === 'tool_use') {
       const id = block['id'];
       const name = block['name'];
-      if (typeof id === 'string' && typeof name === 'string') {
-        handlers.onToolCall({ callId: id, name, input: block['input'] ?? {} });
-        saw = true;
+      const entry = pending.anthropic(blockIndex(frame));
+      if (typeof id === 'string') {
+        entry.callId = id;
+      }
+      if (typeof name === 'string') {
+        entry.name = name;
+      }
+      // A non-streaming server puts the whole input on the start frame; keep it
+      // as the baseline the fragments extend.
+      const inline = block['input'];
+      if (inline !== undefined && inline !== null) {
+        entry.inlineInput = inline;
       }
     }
     return saw;
   }
 
+  // The block is closed, so its arguments are complete.
+  if (type === 'content_block_stop') {
+    const call = pending.flushAnthropic(blockIndex(frame));
+    if (call !== null) {
+      handlers.onToolCall(call);
+      saw = true;
+    }
+    return saw;
+  }
+
   return saw;
+}
+
+/** Anthropic keys content blocks by `index`; default to the only one we expect. */
+function blockIndex(frame: Frame): number {
+  return typeof frame['index'] === 'number' ? frame['index'] : 0;
 }
 
 /** Tool arguments arrive as a JSON *string*; an unparsable one is the model's problem, not a crash. */
@@ -315,7 +388,7 @@ export async function readStream(
     if (dialect === 'responses') {
       decodeResponses(frame, handlers);
     } else if (dialect === 'anthropic') {
-      decodeAnthropic(frame, handlers);
+      decodeAnthropic(frame, handlers, pending);
     } else {
       decodeChatCompletions(frame, handlers, pending);
     }
