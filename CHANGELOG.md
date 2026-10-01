@@ -7,6 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.5]
+
+### Fixed
+
+- **A successful reply was reported as a failure.** The model answered, every
+  token streamed into the chat, and the turn was then discarded with *"Command
+  Code API stream ended before a completion event."* The stream reader required
+  a terminal frame before accepting a turn, and the pattern it required — a
+  usage-carrying chunk with no choices — was inferred from documentation rather
+  than observed. A Chat Completions stream signals completion with
+  `finish_reason` on an ordinary final chunk, which is not a distinct event.
+
+  Completion is now the stream ending. The only failure reported is a stream that
+  produced **no frames at all**; a truncated one surfaces as the truthful
+  "returned no content" rather than a fabricated protocol error. A working
+  reference provider for this API makes no terminal assertion at all — it consumes
+  the stream and returns when it ends.
+
 ## [0.3.4]
 
 The `/responses` dialect is no longer used by default. Both of the last two

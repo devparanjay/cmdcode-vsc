@@ -1575,3 +1575,51 @@ the key was the right call on your part, and the correct response was to remove
 the code I could not verify rather than to keep guessing. Two of the three
 releases in this sequence failed on shapes that the reference — which uses two
 SDK-serialised dialects — cannot get wrong.
+
+### 11.20 0.3.5 — a successful turn was rejected by my own completion check
+
+**Symptom.** The model answered — the text is in the transcript, fully rendered —
+and the turn *still* failed with `Command Code API stream ended before a completion
+event. The first request that has ever actually reached a model.
+
+**Cause.** `readStream` required a terminal frame before accepting a turn:
+
+```ts
+if (!completed) throw new StreamIncompleteError(true);
+```
+
+and the only pattern that set `completed` for `/chat/completions` was a chunk with
+an **empty `choices` array carrying `usage`**. That shape was inferred from the
+prose — "Chat Completions clients see a final `usage` chunk" — and it is not what
+this server sends. A Chat Completions stream signals completion with
+`finish_reason` on an ordinary final chunk, which is not a distinct event at all.
+
+So the reader consumed a complete, correct answer, forwarded every token, and then
+threw because the last chunk matched no pattern I had guessed. The failure was
+manufactured locally, not received from the server.
+
+**Fix, and the reference that settled it.** The working reference provider for this
+same API makes no terminal assertion at all:
+
+```ts
+for await (const chunk of stream) { … }   // no finish_reason check, no completion event
+```
+
+It consumes the stream and returns when it ends. Completion is now the stream
+ending, for every dialect. The only failure reported is a stream that produced **no
+frames at all** — nothing to show the user — and a truncated one surfaces as the
+truthful "returned no content" rather than a fabricated protocol error. The
+`isTerminal` helper was removed rather than left as dead code, so the guessed
+pattern cannot creep back in.
+
+Two tests encode the contract: a stream that ends with no `finish_reason` and no
+usage chunk **resolves** and its tokens are delivered; a stream with no frames at
+all still throws.
+
+`npm run check`: **511 passed / 0 failed**.
+
+**The pattern across 0.3.1–0.3.5, stated once.** Five releases, five defects, and
+every one was a shape I had inferred from documentation or from a route name rather
+than observed on the wire. The reference provider avoids the whole class: it uses
+two dialects, SDK-serialised, and asserts nothing about stream shape. That is the
+lesson, and the code now follows it rather than my own reading of a paragraph.

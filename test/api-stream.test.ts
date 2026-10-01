@@ -176,15 +176,43 @@ describe('readStream — framing and failure', () => {
     expect(c.text).toEqual(['tail']);
   });
 
-  it('throws when the stream ends with no completion frame', async () => {
-    // A truncated stream must be reported, not silently treated as an answer.
+  it('treats a stream that simply ends as a complete turn', async () => {
+    // The 0.3.4 failure. The stream ended with no frame matching the terminal
+    // pattern guessed from documentation, and the reader threw — discarding an
+    // answer the model had already delivered, token by token, to the chat.
+    // Completion is the stream ending; requiring an event invented a failure.
     const c = collector();
     await expect(
-      readStream(sse('data: {"type":"response.output_text.delta","delta":"half"}'), 'responses', c.handlers),
-    ).rejects.toBeInstanceOf(StreamIncompleteError);
+      readStream(
+        sse(
+          'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+          'data: {"choices":[{"delta":{"content":" there"}}]}',
+          // No finish_reason, no usage chunk, no [DONE] — just the socket closing.
+        ),
+        'chat-completions',
+        c.handlers,
+      ),
+    ).resolves.toBeUndefined();
+    // The tokens were still delivered.
+    expect(c.text).toEqual(['Hello', ' there']);
   });
 
-  it('throws when there are no events at all', async () => {
+  it('accepts a stream with no usage frame at all', async () => {
+    const c = collector();
+    await expect(
+      readStream(
+        sse('data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}'),
+        'chat-completions',
+        c.handlers,
+      ),
+    ).resolves.toBeUndefined();
+    expect(c.text).toEqual(['hi']);
+  });
+
+  it('throws only when nothing arrived at all', async () => {
+    // The one failure worth reporting: the server produced no frames, so there
+    // is no answer to show. A truncated stream surfaces as "no content", which
+    // is truthful, rather than a fabricated protocol error.
     const c = collector();
     const error = await readStream(sse(': nothing'), 'responses', c.handlers).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(StreamIncompleteError);

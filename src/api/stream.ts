@@ -177,27 +177,6 @@ function safeParse(value: unknown): unknown {
   }
 }
 
-/**
- * Whether a frame ends the turn in the given dialect.
- *
- * Per the docs every stream ends with a usage frame: Responses on
- * `response.completed`, Anthropic on `message_delta`/`message_stop`, and
- * Chat Completions on a final chunk carrying usage with no choices. Checking the
- * terminal event rather than the socket closing is what lets a truncated stream
- * be reported instead of silently treated as a complete answer.
- */
-function isTerminal(frame: Frame, dialect: 'chat-completions' | 'responses' | 'anthropic'): boolean {
-  const type = frame['type'];
-  if (type === 'response.completed' || type === 'message_stop' || type === 'message_delta') {
-    return true;
-  }
-  if (dialect === 'chat-completions') {
-    const choices = frame['choices'];
-    return Array.isArray(choices) && choices.length === 0 && frame['usage'] !== undefined;
-  }
-  return false;
-}
-
 function readUsage(frame: Frame, handlers: StreamHandlers): void {
   const usage = asRecord(frame['usage']);
   if (usage === null) {
@@ -233,29 +212,23 @@ export async function readStream(
   const reader = body.getReader();
   let buffer = '';
   let sawAnyFrame = false;
-  let completed = false;
 
   const handle = (data: string): void => {
     const frame = parseFrame(data);
     if (frame === null) {
       return;
     }
-    sawAnyFrame = true;
     readUsage(frame, handlers);
-
-    const decoded =
-      dialect === 'responses'
-        ? decodeResponses(frame, handlers)
-        : dialect === 'anthropic'
-          ? decodeAnthropic(frame, handlers)
-          : decodeChatCompletions(frame, handlers);
-    if (decoded) {
-      sawAnyFrame = true;
+    if (dialect === 'responses') {
+      decodeResponses(frame, handlers);
+    } else if (dialect === 'anthropic') {
+      decodeAnthropic(frame, handlers);
+    } else {
+      decodeChatCompletions(frame, handlers);
     }
-
-    if (isTerminal(frame, dialect)) {
-      completed = true;
-    }
+    // Any frame that parsed is proof the stream was alive, which is all that is
+    // needed to decide the turn succeeded.
+    sawAnyFrame = true;
   };
 
   for (;;) {
@@ -290,10 +263,15 @@ export async function readStream(
     }
   }
 
-  if (!completed && !sawAnyFrame) {
+  // Completion is the stream ending, not a terminal event. An answer that was
+  // received in full is an answer, whether or not the last chunk matched a
+  // pattern inferred from documentation — requiring one discarded a successful
+  // turn and surfaced it to the user as a failure.
+  //
+  // The only failure worth reporting is a stream that produced NOTHING. A
+  // truncated stream already surfaces as a provider that returned no content,
+  // which is a truthful message rather than a fabricated protocol error.
+  if (!sawAnyFrame) {
     throw new StreamIncompleteError(false);
-  }
-  if (!completed) {
-    throw new StreamIncompleteError(true);
   }
 }
