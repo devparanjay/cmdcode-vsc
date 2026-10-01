@@ -250,7 +250,7 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
         system: this.renderSystem(),
         messages: messages.map((m) => ({
           role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
-          content: this.renderContentBlocks(m, 'anthropic', imageSupport),
+          content: this.renderAnthropicBlocks(m, imageSupport),
         })),
         // Omitted when empty: every documented example carries no `tools` key,
         // and an empty array is the likeliest trigger for a schema that expects
@@ -281,17 +281,91 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       };
     }
 
-    // OpenAI Responses.
+    // OpenAI Responses. A text-only turn is sent as a bare string, which is the
+    // shape the vendor's own example uses; anything richer goes as an item list.
     return {
       model: model.id,
       instructions: this.renderSystem(),
-      input: messages.map((m) => ({
-        role: m.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
-        content: this.renderContentBlocks(m, 'openai', imageSupport),
-      })),
+      input: this.renderResponsesInput(messages, imageSupport),
       ...(tools.length > 0 ? { tools } : {}),
       stream: true,
     };
+  }
+
+  /**
+   * Render one message as Anthropic content blocks.
+   *
+   * Anthropic names its tool blocks differently from OpenAI: a call is
+   * `tool_use` with `id`/`name`/`input`, and a result is `tool_result` carrying
+   * `tool_use_id`. Both live inside the message's `content` array here, which is
+   * where Anthropic wants them.
+   */
+  private renderAnthropicBlocks(
+    message: vscode.LanguageModelChatRequestMessage,
+    imageSupport: boolean,
+  ): unknown[] {
+    const blocks: unknown[] = this.renderContentBlocks(message, 'anthropic', imageSupport);
+    for (const part of message.content) {
+      if (part instanceof vscode.LanguageModelToolCallPart) {
+        blocks.push({ type: 'tool_use', id: part.callId, name: part.name, input: part.input });
+        continue;
+      }
+      if (part instanceof vscode.LanguageModelToolResultPart) {
+        blocks.push({
+          type: 'tool_result',
+          tool_use_id: part.callId,
+          content: part.content
+            .map((c) => (c instanceof vscode.LanguageModelTextPart ? c.value : ''))
+            .join(''),
+        });
+      }
+    }
+    return blocks;
+  }
+
+  /**
+   * Build the `input` array for /responses.
+   *
+   * Tool results are TOP-LEVEL items, not content blocks inside the next
+   * message: a `function_call_output` sibling of the message it answers. Nesting
+   * them would make the item's required fields unreadable.
+   */
+  private renderResponsesInput(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    imageSupport: boolean,
+  ): unknown[] {
+    const out: unknown[] = [];
+    for (const message of messages) {
+      for (const part of message.content) {
+        if (part instanceof vscode.LanguageModelToolResultPart) {
+          out.push({
+            type: 'function_call_output',
+            call_id: part.callId,
+            output: part.content
+              .map((c) => (c instanceof vscode.LanguageModelTextPart ? c.value : ''))
+              .join(''),
+          });
+          continue;
+        }
+        if (part instanceof vscode.LanguageModelToolCallPart) {
+          out.push({
+            type: 'function_call',
+            call_id: part.callId,
+            name: part.name,
+            arguments: JSON.stringify(part.input),
+          });
+        }
+      }
+      const blocks = this.renderContentBlocks(message, 'openai', imageSupport);
+      if (blocks.length > 0) {
+        out.push({
+          role:
+            message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user',
+          content: blocks,
+        });
+      }
+    }
+    return out;
   }
 
   /**
@@ -380,7 +454,12 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
     const parts: unknown[] = [];
     for (const part of message.content) {
       if (part instanceof vscode.LanguageModelTextPart) {
-        parts.push({ type: 'text', text: part.value });
+        // The text block's `type` is per-dialect: Chat Completions and
+        // Anthropic Messages both use `text`, but Responses uses `input_text`.
+        // Sending `text` to /responses leaves the required string unreadable and
+        // the server answers "Invalid input: expected string, received
+        // undefined" — on every message, images and tools or not.
+        parts.push({ type: dialect === 'openai' ? 'input_text' : 'text', text: part.value });
         continue;
       }
       // `LanguageModelDataPart` is delivered to providers by VS Code but is not
@@ -388,12 +467,25 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
       // is neither text nor image-shaped is dropped rather than guessed at.
       if (isDataPart(part)) {
         if (imageSupport) {
+          // Anthropic takes raw base64 bytes; the OpenAI routes take a data URL
+          // as a STRING. Responses' `input_image` additionally requires
+          // `detail`, and its `image_url` is a bare string — sending
+          // `{ image_url: { url } }` there is what produces:
+          //
+          //   Invalid input: expected string, received undefined
+          //
+          // Chat Completions is the one route that does take an object,
+          // `{ type: 'image_url', image_url: { url } }`, and it is built
+          // separately in renderChatCompletionsMessages.
           const dataUrl = buildImagePromptPart(part);
           if (dataUrl !== null) {
             parts.push(
               dialect === 'anthropic'
-                ? { type: 'image', source: { type: 'base64', media_type: part.mimeType, data: part.data } }
-                : { type: 'input_image', image_url: dataUrl },
+                ? {
+                    type: 'image',
+                    source: { type: 'base64', media_type: part.mimeType, data: part.data },
+                  }
+                : { type: 'input_image', image_url: dataUrl, detail: 'auto' },
             );
             continue;
           }
@@ -401,25 +493,10 @@ export class CommandCodeApiChatProvider implements vscode.LanguageModelChatProvi
         this.log.debug(`dropped unsupported or oversized data part (${part.mimeType})`);
         continue;
       }
-      if (part instanceof vscode.LanguageModelToolResultPart) {
-        // The result of a call Copilot ran for us; hand it back verbatim.
-        parts.push({
-          type: 'function_call_output',
-          call_id: part.callId,
-          output: part.content
-            .map((c) => (c instanceof vscode.LanguageModelTextPart ? c.value : ''))
-            .join(''),
-        });
-        continue;
-      }
-      if (part instanceof vscode.LanguageModelToolCallPart) {
-        parts.push({
-          type: 'function_call',
-          call_id: part.callId,
-          name: part.name,
-          arguments: JSON.stringify(part.input),
-        });
-      }
+      // Tool calls and tool results are handled by the caller, which places
+      // them where each route expects them: top-level items on /responses,
+      // their own `role: "tool"` message on /chat/completions, and a user
+      // message on /messages. They are not content blocks here.
     }
     return parts;
   }

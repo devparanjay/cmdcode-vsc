@@ -30,12 +30,26 @@ export class LanguageModelTextPart {
   constructor(public value: string) {}
 }
 
+/**
+ * A binary part as VS Code delivers it to a provider.
+ *
+ * The product matches these **structurally**, not with `instanceof`, because
+ * `LanguageModelDataPart` is not yet in the stable typings. `api-provider.ts`
+ * requires a string `mimeType` and a `Uint8Array` **`data`**:
+ *
+ *   typeof record.mimeType === 'string' && record.data instanceof Uint8Array
+ *
+ * so the stub exposes `data` as the byte field. An earlier `value` field made
+ * every image test fail on an empty content array, which is the same shape of
+ * mistake as a flat tool definition: the test would have passed for the wrong
+ * reason had it only asserted that the request was made.
+ */
 export class LanguageModelDataPart {
-  value: unknown;
-  mimeType?: string;
+  data: Uint8Array;
+  mimeType: string;
 
-  constructor(value: Uint8Array, mimeType?: string) {
-    this.value = value;
+  constructor(data: Uint8Array, mimeType = 'image/png') {
+    this.data = data;
     this.mimeType = mimeType;
   }
 }

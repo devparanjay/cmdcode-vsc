@@ -4,6 +4,12 @@ import { ProviderApiClient } from '../src/api/client.js';
 import { CommandCodeApiChatProvider } from '../src/api-provider.js';
 import { MODELS, chatIdFor } from '../src/catalog.js';
 import { CONFIG_DEFAULTS, type CmdCodeConfig, type Logger } from '../src/types.js';
+import {
+  LanguageModelDataPart,
+  LanguageModelTextPart,
+  LanguageModelToolCallPart,
+  LanguageModelToolResultPart,
+} from './vscode-stub.js';
 
 // The request BODIES, not the plumbing.
 //
@@ -28,8 +34,13 @@ interface Sent {
   readonly body: Record<string, unknown>;
 }
 
+/**
+ * A real `LanguageModelTextPart`, because the provider narrows content with
+ * `instanceof` — a bare string would be dropped rather than rendered, and the
+ * test would pass for the wrong reason (an empty content array).
+ */
 function textPart(value: string): never {
-  return value as never;
+  return new LanguageModelTextPart(value) as never;
 }
 
 /**
@@ -190,6 +201,125 @@ describe('each route gets its own URL and body dialect', () => {
         expect(value, `${model} has an undefined field`).not.toBeUndefined();
       }
     }
+  });
+});
+
+describe('the text block type is per-dialect', () => {
+  // The 0.3.2 failure. Responses names its text block `input_text`; the other two
+  // routes use `text`. Sending `text` to /responses left the required string
+  // unreadable, so the server answered "expected string, received undefined" on
+  // EVERY message — no image, no tool, just plain chat.
+  it('sends input_text to /responses and text elsewhere', async () => {
+    const responses = await send('deepseek/deepseek-v4-pro', [textPart('hello')], []);
+    const input = responses.body['input'] as { role: string; content: { type: string }[] }[];
+    expect(input[0]!.content[0]!.type).toBe('input_text');
+
+    const chat = await send('stealth/space-bunny-alpha', [textPart('hello')], []);
+    const messages = chat.body['messages'] as { content: { type: string }[] }[];
+    expect(messages[0]!.content[0]!.type).toBe('text');
+
+    const claude = await send('claude-sonnet-5', [textPart('hello')], []);
+    const anthropic = claude.body['messages'] as { content: { type: string }[] }[];
+    expect(anthropic[0]!.content[0]!.type).toBe('text');
+  });
+
+  it('carries the prompt text on every route', async () => {
+    for (const model of [
+      'deepseek/deepseek-v4-pro',
+      'stealth/space-bunny-alpha',
+      'claude-sonnet-5',
+    ]) {
+      const { body } = await send(model, [textPart('hello')], []);
+      expect(JSON.stringify(body), model).toContain('hello');
+    }
+  });
+
+  it('names tool blocks per dialect', async () => {
+    // Anthropic: tool_use / tool_result inside the message content.
+    const claude = await send(
+      'claude-sonnet-5',
+      [
+        textPart('call it'),
+        new LanguageModelToolCallPart('call_1', 'read_file', { path: 'a.ts' }) as never,
+        new LanguageModelToolResultPart('call_1', [textPart('contents')]) as never,
+      ],
+      [TEXT_TOOL],
+    );
+    const anthropic = claude.body['messages'] as { content: { type: string }[] }[];
+    const types = anthropic[0]!.content.map((c) => c.type);
+    expect(types).toContain('tool_use');
+    expect(types).toContain('tool_result');
+    expect(types).not.toContain('function_call_output');
+
+    // Responses: function_call / function_call_output as top-level siblings.
+    const responses = await send(
+      'deepseek/deepseek-v4-pro',
+      [
+        textPart('call it'),
+        new LanguageModelToolCallPart('call_1', 'read_file', { path: 'a.ts' }) as never,
+        new LanguageModelToolResultPart('call_1', [textPart('contents')]) as never,
+      ],
+      [TEXT_TOOL],
+    );
+    const input = responses.body['input'] as { type?: string }[];
+    const itemTypes = input.map((i) => i.type).filter(Boolean);
+    // Top-level, NOT nested inside a message's content.
+    expect(itemTypes).toContain('function_call');
+    expect(itemTypes).toContain('function_call_output');
+
+    // Chat Completions: the result is its own role:"tool" message.
+    const chat = await send(
+      'stealth/space-bunny-alpha',
+      [
+        textPart('call it'),
+        new LanguageModelToolCallPart('call_1', 'read_file', { path: 'a.ts' }) as never,
+        new LanguageModelToolResultPart('call_1', [textPart('contents')]) as never,
+      ],
+      [TEXT_TOOL],
+    );
+    const messages = chat.body['messages'] as { role: string; tool_call_id?: string }[];
+    const toolMessage = messages.find((m) => m.role === 'tool');
+    expect(toolMessage?.tool_call_id).toBe('call_1');
+  });
+});
+
+describe('image blocks are shaped per dialect', () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+  function imagePart(): never {
+    return new LanguageModelDataPart(PNG, 'image/png') as never;
+  }
+
+  it('sends image_url as a bare string plus detail on /responses', async () => {
+    // Sending `{ image_url: { url } }` here is what produced "expected string,
+    // received undefined". Responses wants a string, and `detail` is required.
+    const { body } = await send('deepseek/deepseek-v4-pro', [imagePart()], []);
+    const input = body['input'] as { content: Record<string, unknown>[] }[];
+    const image = input[0]!.content.find((c) => c['type'] === 'input_image');
+    expect(image).toBeDefined();
+    expect(typeof image!['image_url']).toBe('string');
+    expect(String(image!['image_url'])).toMatch(/^data:image\/png;base64,/);
+    expect(image!['detail']).toBeTypeOf('string');
+  });
+
+  it('sends image_url as an object on /chat/completions', async () => {
+    // The one route that does take `{ url }`.
+    const { body } = await send('stealth/space-bunny-alpha', [imagePart()], []);
+    const messages = body['messages'] as { content: Record<string, unknown>[] }[];
+    const image = messages[0]!.content.find((c) => c['type'] === 'image_url');
+    expect(image).toBeDefined();
+    const url = image!['image_url'] as { url?: unknown };
+    expect(typeof url.url).toBe('string');
+  });
+
+  it('sends raw base64 bytes on /messages', async () => {
+    const { body } = await send('claude-sonnet-5', [imagePart()], []);
+    const messages = body['messages'] as { content: Record<string, unknown>[] }[];
+    const image = messages[0]!.content.find((c) => c['type'] === 'image');
+    expect(image).toBeDefined();
+    const source = image!['source'] as { type?: string; media_type?: string };
+    expect(source.type).toBe('base64');
+    expect(source.media_type).toBe('image/png');
   });
 });
 

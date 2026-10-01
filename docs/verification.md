@@ -1455,3 +1455,65 @@ nested definition and `input_schema` are present and the flat shape is gone.
 **Still unverified:** a live request. No API key is available in this environment, so the wire
 format is verified by construction and by unit tests against a captured body, not by a real round
 trip. That is the gap that let this ship, and it closes the moment a key is supplied.
+
+### 11.18 0.3.3 — the per-dialect text block type
+
+**Symptom.** Every API message returned `Invalid input: expected string, received undefined`,
+including plain text-only chat.
+
+**Diagnosis came from the log, not a guess.** 0.3.2 logs the route *before* each request, so the
+two live log files answered it immediately:
+
+```
+api: POST /provider/v1/chat/completions model=stealth/space-bunny-alpha        tools=96 zdr=true
+api: POST /provider/v1/chat/completions model=stealth/space-bunny-alpha        tools=0  zdr=true
+api: POST /provider/v1/responses        model=poolside/laguna-s-2.1-free       tools=0  zdr=true
+```
+
+`tools=0` rules out the tool definition shape, and three routes are implicated — so the defect was
+in the **common text path**, not in images or tools.
+
+**Cause.** The text block's `type` is per-dialect:
+
+| Route | Text block |
+| --- | --- |
+| `/responses` | `{ type: "input_text", text }` |
+| `/chat/completions` | `{ type: "text", text }` |
+| `/messages` | `{ type: "text", text }` |
+
+The extension sent `text` to all three. `/responses` then looks for a string on an item whose type
+it does not recognise, and answers "expected string, received undefined" — every message.
+
+**Two more shape defects in the same pass**, both invisible until asserted:
+
+- **`input_image`** takes `image_url` as a bare **string** and requires `detail`. The extension sent
+  `{ image_url: { url } }`, which is exactly the `/chat/completions` shape — and `/responses` is the
+  one route it is not.
+- **Tool parts were emitted as content blocks on every dialect.** Anthropic wants `tool_use` /
+  `tool_result` inside the message content; Responses wants `function_call` /
+  `function_call_output` as **top-level** siblings of the message; Chat Completions wants the result
+  as its own `role: "tool"` message. One placement cannot serve three routes.
+
+**A test bug that had been hiding the image bugs.** `LanguageModelDataPart` in the `vscode` stub
+exposed its bytes as `value`, while the product matches data parts *structurally* on a `data` field:
+
+```ts
+typeof record.mimeType === 'string' && record.data instanceof Uint8Array
+```
+
+So every image assertion was evaluating against an **empty content array**. Had those tests only
+checked "a request was made", they would have passed while the image path was broken — precisely the
+failure mode that let 0.3.1 and 0.3.2 ship. The stub now exposes `data`, and the image tests assert
+real content.
+
+**Executed verification.** `test/api-request-body.test.ts` asserts, per route: the text block type,
+the image shape, the tool placement, and that the prompt text is present. Reverting only the text
+type to `text` — a one-token change reproducing the reported failure — fails a test, verified.
+
+`npm run check`: **507 passed / 0 failed**.
+
+**The honest summary of 0.3.1 → 0.3.3.** Three releases, three schema defects, one root cause: I
+implemented the three wire formats from their *names* rather than their specs, and tested the
+converted objects rather than the bytes. Each defect was real and each is now guarded by an
+assertion on the serialised body. What remains unverified is still the same thing — no API key in
+this environment, so no live round trip — and that gap is what let all three through.

@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.3]
+
+### Fixed
+
+- **Every API message still failed, with `Invalid input: expected string, received undefined`.**
+  The text block's `type` is **per-dialect**: Responses calls it `input_text`, while
+  `/chat/completions` and `/messages` both use `text`. Sending `text` to `/responses` left the
+  required string unreadable — on every message, with no image and no tools involved.
+- **`/responses` image blocks were malformed.** `input_image` takes `image_url` as a bare **string**
+  and requires `detail`; the extension was sending `{ image_url: { url } }`, which is the shape
+  `/chat/completions` wants and the one route that is not `/responses`.
+- **Tool parts are now placed where each route expects them.** They were being emitted as content
+  blocks on every dialect. Anthropic wants `tool_use`/`tool_result` inside the message content;
+  Responses wants `function_call`/`function_call_output` as **top-level** siblings of the message;
+  Chat Completions wants the result as its own `role: "tool"` message keyed by `tool_call_id`.
+
+### Changed
+
+- `test/api-request-body.test.ts` now asserts the per-dialect text type, image shape, and tool
+  placement on all three routes. Reverting the text type to `text` fails a test, verified — this
+  is the assertion that was missing when 0.3.2 shipped.
+
+### Fixed (test infrastructure)
+
+- `LanguageModelDataPart` in the `vscode` stub exposed its bytes as `value`, while the product
+  matches data parts **structurally** on a `data` field. Every image test was therefore passing
+  against an empty content array — the same failure mode as the bugs above, in the tests themselves.
+
 ## [0.3.2]
 
 ### Fixed
