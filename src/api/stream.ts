@@ -60,8 +60,34 @@ function parseFrame(data: string): Frame | null {
   }
 }
 
-/** OpenAI Chat Completions: choices[].delta.content and .tool_calls[]. */
-function decodeChatCompletions(frame: Frame, handlers: StreamHandlers): boolean {
+/** A tool call being assembled from a stream of deltas. */
+interface PendingToolCall {
+  callId?: string;
+  name?: string;
+  args: string;
+}
+
+/** A completed call, as handed to the host. */
+type CompletedToolCall = { callId: string; name: string; input: unknown };
+
+/**
+ * OpenAI Chat Completions: choices[].delta.content and .tool_calls[].
+ *
+ * Tool calls MUST be accumulated, not emitted per delta. A streamed call sends
+ * `id` and `name` once on the first delta and then dribbles the JSON arguments
+ * out in fragments across many further deltas — so emitting on the frame that
+ * carries the name delivers `input: {}` (or `{raw: ""}`) and throws every
+ * argument away. The model then calls the tool blind, with none of the
+ * parameters its own schema declared as required.
+ *
+ * Calls are keyed by `index`, which is the stable identity across the deltas of
+ * one call, and are emitted when the choice reports `finish_reason`.
+ */
+function decodeChatCompletions(
+  frame: Frame,
+  handlers: StreamHandlers,
+  pending: ToolCallSink,
+): boolean {
   const choices = frame['choices'];
   if (!Array.isArray(choices)) {
     return false;
@@ -82,22 +108,87 @@ function decodeChatCompletions(frame: Frame, handlers: StreamHandlers): boolean 
     if (Array.isArray(toolCalls)) {
       for (const call of toolCalls) {
         const record2 = asRecord(call);
-        const fn = asRecord(record2?.['function']);
-        const name = fn?.['name'];
-        const id = record2?.['id'];
-        if (typeof name === 'string' && typeof id === 'string') {
-          const rawArgs = fn?.['arguments'];
-          handlers.onToolCall({
-            callId: id,
-            name,
-            input: safeParse(rawArgs),
-          });
-          saw = true;
+        if (record2 === null) {
+          continue;
         }
+        const fn = asRecord(record2['function']);
+        const index = typeof record2['index'] === 'number' ? record2['index'] : 0;
+        const name = fn?.['name'];
+        const id = record2['id'];
+        const args = fn?.['arguments'];
+        const entry = pending.chatCompletions(index);
+        if (typeof name === 'string') {
+          entry.name = name;
+        }
+        if (typeof id === 'string') {
+          entry.callId = id;
+        }
+        if (typeof args === 'string') {
+          entry.args += args;
+        }
+      }
+    }
+    // The turn ends at the frame carrying a finish_reason; that is where the
+    // calls are complete and can be handed over.
+    if (typeof record['finish_reason'] === 'string') {
+      for (const call of pending.flushChatCompletions()) {
+        handlers.onToolCall(call);
+        saw = true;
       }
     }
   }
   return saw;
+}
+
+/**
+ * Accumulator for Chat Completions tool calls that span many frames.
+ *
+ * One instance lives per `readStream` call, so two concurrent requests never
+ * share half-assembled calls.
+ */
+class ToolCallSink {
+  private readonly chatCompletionsCalls = new Map<number, PendingToolCall>();
+
+  /** The (possibly still empty) accumulator for a streamed call at `index`. */
+  chatCompletions(index: number): PendingToolCall {
+    let entry = this.chatCompletionsCalls.get(index);
+    if (entry === undefined) {
+      entry = { args: '' };
+      this.chatCompletionsCalls.set(index, entry);
+    }
+    return entry;
+  }
+
+  /**
+   * Emit every complete call, in index order, and clear the accumulator.
+   *
+   * A call missing a name or an id was never fully described, so it is dropped
+   * rather than handed to the host half-formed — Copilot would fail a call the
+   * user never asked for.
+   */
+  flushChatCompletions(): CompletedToolCall[] {
+    const out: CompletedToolCall[] = [];
+    for (const index of [...this.chatCompletionsCalls.keys()].sort((a, b) => a - b)) {
+      const entry = this.chatCompletionsCalls.get(index);
+      this.chatCompletionsCalls.delete(index);
+      if (entry === undefined || typeof entry.name !== 'string' || typeof entry.callId !== 'string') {
+        continue;
+      }
+      out.push({ callId: entry.callId, name: entry.name, input: safeParse(entry.args) });
+    }
+    return out;
+  }
+
+  /**
+   * Calls still buffered when the stream ended with no `finish_reason`.
+   *
+   * The stream ending is a complete turn (see readStream), so a call the server
+   * finished describing but never flagged is still the model's real intent and
+   * must not be dropped.
+   */
+  drain(): CompletedToolCall[] {
+    return this.flushChatCompletions();
+  }
 }
 
 /**
@@ -212,6 +303,8 @@ export async function readStream(
   const reader = body.getReader();
   let buffer = '';
   let sawAnyFrame = false;
+  // Per-stream, so two concurrent requests never share half-assembled calls.
+  const pending = new ToolCallSink();
 
   const handle = (data: string): void => {
     const frame = parseFrame(data);
@@ -224,7 +317,7 @@ export async function readStream(
     } else if (dialect === 'anthropic') {
       decodeAnthropic(frame, handlers);
     } else {
-      decodeChatCompletions(frame, handlers);
+      decodeChatCompletions(frame, handlers, pending);
     }
     // Any frame that parsed is proof the stream was alive, which is all that is
     // needed to decide the turn succeeded.
@@ -268,6 +361,13 @@ export async function readStream(
   // pattern inferred from documentation — requiring one discarded a successful
   // turn and surfaced it to the user as a failure.
   //
+  // The same applies to a tool call: a server that ends the stream after the last
+  // argument fragment but never sends `finish_reason` has still fully described
+  // the call. Emit what is buffered rather than discarding the model's intent.
+  for (const call of pending.drain()) {
+    handlers.onToolCall(call);
+  }
+
   // The only failure worth reporting is a stream that produced NOTHING. A
   // truncated stream already surfaces as a provider that returned no content,
   // which is a truthful message rather than a fabricated protocol error.

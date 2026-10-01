@@ -29,6 +29,44 @@ function collector() {
   };
 }
 
+/**
+ * A Chat Completions frame carrying one tool-call delta, built with
+ * JSON.stringify rather than a hand-escaped literal.
+ *
+ * The argument fragments are nested JSON inside a JSON string, so hand-writing
+ * them costs two levels of escaping and a mistyped comma silently produces an
+ * unparsable payload that the reader discards — which looks exactly like a
+ * decoder bug. Building the frame means the fragments cannot be mistyped.
+ */
+function ccToolDelta(args: {
+  index?: number;
+  id?: string;
+  name?: string;
+  args?: string;
+  finishReason?: string | null;
+}): string {
+  const toolCalls = [
+    {
+      ...(args.index === undefined ? {} : { index: args.index }),
+      ...(args.id === undefined ? {} : { id: args.id }),
+      type: 'function',
+      function: {
+        ...(args.name === undefined ? {} : { name: args.name }),
+        arguments: args.args ?? '',
+      },
+    },
+  ];
+  return `data: ${JSON.stringify({
+    choices: [
+      {
+        index: 0,
+        delta: { tool_calls: toolCalls },
+        ...(args.finishReason === undefined ? {} : { finish_reason: args.finishReason }),
+      },
+    ],
+  })}`;
+}
+
 describe('readStream — Responses dialect', () => {
   it('streams text deltas in arrival order', async () => {
     const c = collector();
@@ -115,6 +153,77 @@ describe('readStream — Chat Completions dialect', () => {
     );
     expect(c.tools).toHaveLength(1);
     expect(c.tools[0].name).toBe('ls');
+    // The arguments arrive AFTER the name, in fragments. Asserting only the
+    // name is what let a decoder that threw every argument away pass: the
+    // assertion has to cover the reassembled payload.
+    expect(c.tools[0].input).toEqual({ p: 1 });
+  });
+
+  it('reassembles arguments fragmented across many deltas, and emits one call', async () => {
+    // How OpenAI actually streams: id + name on the first delta, arguments
+    // dribbling out afterwards. Emitting on the name-bearing delta delivers
+    // empty input and the model calls the tool blind.
+    const fragments = ['{"page', 'Id":"3"', ',"url":"http://x"', '}'];
+    const c = collector();
+    await readStream(
+      sse(
+        ccToolDelta({ index: 0, id: 'call_abc', name: 'playwright_browser_navigate' }),
+        ...fragments.map((f) => ccToolDelta({ index: 0, args: f, finishReason: null })),
+        ccToolDelta({ index: 0, args: '', finishReason: 'tool_calls' }),
+        'data: [DONE]',
+      ),
+      'chat-completions',
+      c.handlers,
+    );
+    // One call, not one per argument fragment.
+    expect(c.tools).toHaveLength(1);
+    expect(c.tools[0].callId).toBe('call_abc');
+    expect(c.tools[0].name).toBe('playwright_browser_navigate');
+    expect(c.tools[0].input).toEqual({ pageId: '3', url: 'http://x' });
+  });
+
+  it('keeps parallel tool calls separate by index', async () => {
+    // Two calls interleaved in one delta array: buffering by name instead of by
+    // `index` merges their arguments into one unusable blob.
+    const pair = (i: number, id: string, name: string, args: string): string =>
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: i, id, type: 'function', function: { name, arguments: args } }],
+            },
+          },
+        ],
+      })}`;
+    const c = collector();
+    await readStream(
+      sse(
+        pair(0, 'c1', 'read_file', '{"p":'),
+        pair(1, 'c2', 'grep', '{"q":'),
+        pair(0, 'c1', 'read_file', '"a.ts"}'),
+        pair(1, 'c1', 'grep', '"foo"}'),
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      ),
+      'chat-completions',
+      c.handlers,
+    );
+    expect(c.tools).toHaveLength(2);
+    expect(c.tools[0].input).toEqual({ p: 'a.ts' });
+    expect(c.tools[1].input).toEqual({ q: 'foo' });
+  });
+
+  it('still emits a call the server never flagged with finish_reason', async () => {
+    // The stream ending is a complete turn; a call it finished describing is
+    // the model's real intent and must not be dropped in the flush.
+    const c = collector();
+    await readStream(
+      sse(ccToolDelta({ index: 0, id: 'c1', name: 'ls', args: '{"p":"src"}' })),
+      'chat-completions',
+      c.handlers,
+    );
+    expect(c.tools).toHaveLength(1);
+    expect(c.tools[0].input).toEqual({ p: 'src' });
   });
 });
 
