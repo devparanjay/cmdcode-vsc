@@ -7,6 +7,69 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.6]
+
+The last five releases fixed request *bodies*. This one fixes the response: every
+tool call was reaching Copilot with no arguments at all, and the extension then
+answered a successful call with a sentence saying it had failed. Together those
+produced a model that retried the same call in a loop while narrating the retries.
+
+### Fixed
+
+- **Streamed tool arguments were discarded, so every tool call arrived empty.**
+  On `/chat/completions`, `id` and `name` arrive once on the first delta and the
+  JSON arguments stream afterwards in fragments. The reader emitted the call on
+  the first delta and read `arguments` from that same frame, where it is always
+  `""`. Calls reached Copilot as `input: {raw: ""}` — no parameters, including
+  ones the model's own schema marked required.
+
+  Calls are now accumulated per `index` and emitted on `finish_reason`.
+
+- **Anthropic had the same defect, unconditionally.** A `tool_use` block carries
+  `input: {}` on `content_block_start` with the arguments following as
+  `input_json_delta` fragments. The call was emitted at the start frame, so every
+  Claude tool call arrived as `input: {}`.
+
+  Fragments are accumulated per block index and the call is emitted when the
+  block closes. A non-streaming server's inline input is kept as the fallback.
+
+- **A successful tool call was answered with "returned no content".** A turn that
+  only calls a tool has no text in it by definition, so the guard fired and
+  appended to the answer:
+
+  ```
+  Command Code returned no content. See the Command Code log.
+  ```
+
+  Reported parts become response content, so VS Code concatenated that into the
+  answer and sent it back on the next request — where the model read it as its own
+  prior turn, and retried. This is the same output-integrity rule as the "Working…"
+  placeholder removed in 0.1.3: anything a provider writes into the content stream
+  is indistinguishable from the model's own words, and permanently so. The guard
+  now fires only when a turn produced neither text nor a tool call.
+
+  A turn that genuinely produced nothing still reports, so a hang stays explained.
+
+### Why
+
+The same shape on both dialects, and the two decoder fixes are one fix. The
+earlier releases fixed what we *send*; this one fixes what we *read back*, and it
+was invisible in review because the test that covered split arguments asserted
+the tool's **name** and nothing else — so a reader that threw away every argument
+passed it.
+
+The test now asserts the reassembled payload, and its fixtures are built with
+`JSON.stringify` rather than hand-escaped literals: argument fragments are JSON
+nested inside a JSON string, and a mistyped comma there produces an unparsable
+frame the reader discards — indistinguishable from a decoder bug, and it cost
+three false diagnoses while writing these tests.
+
+### Verified
+
+`npm run check` — **520 passed / 0 failed**. Each fix was confirmed by restoring
+the old behaviour and counting the failures (3, 4 and 1 respectively), so none of
+them can pass silently again.
+
 ## [0.3.5]
 
 ### Fixed

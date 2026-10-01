@@ -1623,3 +1623,116 @@ every one was a shape I had inferred from documentation or from a route name rat
 than observed on the wire. The reference provider avoids the whole class: it uses
 two dialects, SDK-serialised, and asserts nothing about stream shape. That is the
 lesson, and the code now follows it rather than my own reading of a paragraph.
+
+> The sections above are preserved **exactly as written**, including the claims
+> §11.21 contradicts. §11.20's closing claim — that the reader "asserts nothing
+> about stream shape" — is true of stream *completion* and was false of tool calls,
+> which the same reader was still asserting the shape of. Nothing above has been
+> edited to accommodate the correction.
+
+### 11.21 0.3.6 — every tool call arrived with no arguments, and success was reported as failure
+
+**Symptom.** A browser question — "what's the text inside the logo on this page?" —
+produced this transcript, reported verbatim:
+
+```
+I'll take a look at the page.
+Command Code returned no content. See the Command Code log.
+Command Code returned no content. See the Command Code log.
+Let me retry with the page ID properly included.
+Command Code returned no content. See the Command Code log.
+I keep failing to pass the required parameter. Let me try a different tool.
+The Playwright integration is disabled. Let me try the page snapshot with the page ID.
+Command Code returned no content. See the Command Code log.
+Let me load the browser tooling properly.
+Browser tools are now available. Let me inspect the page.
+```
+
+This is **three defects**, and the transcript is the proof of all three at once:
+the model was calling tools it could not satisfy, it was being told it had
+produced nothing, and it kept going anyway.
+
+**Defect 1 — arguments discarded (Chat Completions).** `decodeChatCompletions`
+emitted on the first delta and read `arguments` from that same frame:
+
+```ts
+if (typeof name === 'string' && typeof id === 'string') {
+  handlers.onToolCall({ callId: id, name, input: safeParse(rawArgs) });
+}
+```
+
+A streamed call sends `id` and `name` **once**, on the first delta, where
+`arguments` is `""`. The real arguments arrive as fragments across every following
+delta. Reproduced against a realistic stream:
+
+```
+{ "callId": "call_abc123",
+  "name": "playwright_browser_navigate",
+  "input": { "raw": "" } }
+```
+
+That is the model's "I keep failing to pass the required parameter" — it genuinely
+had no `pageId` and no `url`, and nothing in the stream ever told it why.
+
+**Defect 2 — arguments discarded (Anthropic), unconditionally.** Worse, because
+there was no correct path at all. The call fired at `content_block_start`, where
+Anthropic always sends `input: {}`, and `input_json_delta.partial_json` was never
+read. Every Claude tool call arrived empty.
+
+**Defect 3 — the injected sentence is the loop's fuel.** `sawText` was set only by
+`onText`, so a tool-only turn left it false and the provider appended its own
+diagnostic to the response. Reported parts are response *content*: VS Code
+concatenates them into the answer with no retract and sends them back next turn as
+the model's own prior output. So the model read "returned no content" as something
+**it** had said, and concluded its call had failed — retrying, narrating, and
+repeating. This is the §11.13 output-integrity rule recurring in a second form: a
+diagnostic written into the content stream is indistinguishable from the model's
+words and permanent.
+
+**Why the tests missed all three.** The one test covering split arguments asserted
+the tool's **name**:
+
+```ts
+expect(c.tools[0].name).toBe('ls');   // passed while every argument was dropped
+```
+
+A reader that discarded the entire payload satisfied it. It now asserts the
+reassembled object. The Anthropic test asserted a hand-written non-streaming
+shape (`input` inline on the start frame) — a shape this server never sends in
+streaming mode — so it passed while the streaming path was empty.
+
+**Fix.** Calls accumulate per `index` (Chat Completions) and per block index
+(Anthropic) in a per-stream `ToolCallSink`, and are emitted at `finish_reason` /
+`content_block_stop`. Anything buffered when the stream ends is drained rather than
+dropped, consistent with §11.20's rule that the stream ending is a complete turn.
+The junk guard became `!sawText && !sawToolCall`.
+
+**Verification, by mutation rather than by assertion.** Each fix was reverted to
+its original behaviour and the suite re-run:
+
+| Fix | Behaviour restored | Assertions that fail |
+|-----|--------------------|-----------------------|
+| Chat Completions buffering | emit per delta | 3 |
+| Anthropic accumulation | emit at `content_block_start` | 4 |
+| Junk guard | `!sawText` only | 1 |
+
+`npm run check`: **520 passed / 0 failed**.
+
+**The harness is the third defect, and it is the one that cost the most.** The
+fixtures were hand-escaped SSE literals, and an argument fragment is JSON nested
+inside a JSON string — two levels of escaping. A mistyped comma produces a frame
+the reader *silently discards*, which is indistinguishable from a decoder bug. I
+hit that three times while writing these tests and misread it as a source defect
+twice. Every new fixture is now built with `JSON.stringify`, so a fragment cannot
+be mistyped. The lesson generalises: a test harness that can silently discard the
+input it is meant to carry will be debugged as if it were the code under test.
+
+**The pattern across 0.3.1–0.3.6, extended.** The five earlier releases each
+inferred a *request* shape from prose. This one inferred a *response* shape the
+same way — from what a frame carrying `name` "should" contain — and got it wrong
+in the direction that looked like success. Both halves of the lesson are the same
+one: read the wire, not the documentation. The difference is that a wrong request
+shape fails loudly and immediately, while a wrong response shape fails *quietly and
+silently* — the model is handed an empty object, believes it, and acts on it. That
+is strictly worse, and it is why the response path needed observation rather than
+inference in the first place.
